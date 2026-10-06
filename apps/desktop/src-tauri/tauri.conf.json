@@ -1,0 +1,32 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "DockStudio",
+  "version": "0.1.0",
+  "identifier": "com.dockstudio.app",
+  "build": {
+    "frontendDist": "../web/dist",
+    "beforeBuildCommand": "cd ../web && npm run build",
+    "beforeDevCommand": "cd ../web && npm run dev",
+    "devUrl": "http://localhost:5173"
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [],
+    "externalBin": ["binaries/dockstudio-backend"]
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "DockStudio",
+        "width": 1440,
+        "height": 900,
+        "minWidth": 1024,
+        "minHeight": 700
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; connect-src 'self' http://localhost:* http://127.0.0.1:*; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'"
+    }
+  }
+}

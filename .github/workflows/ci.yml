@@ -1,0 +1,81 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  server-test:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-13, macos-14]
+        python: ["3.12"]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Fetch engine binaries
+        run: bash scripts/fetch_engines.sh
+      - name: Install backend
+        run: pip install -e "server[dev]"
+      - name: Lint
+        run: ruff check server/dockstudio
+      - name: Test (含真实 vina e2e)
+        run: pytest server/tests -q
+
+  web-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: cd apps/web && npm ci && npm run build
+
+  package-backend:
+    needs: [server-test, web-build]
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-13, macos-14]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: bash scripts/fetch_engines.sh
+      - run: pip install -e "server[dev]" pyinstaller
+      - run: pyinstaller scripts/backend.spec --noconfirm --clean
+      - name: Smoke test frozen binary
+        run: bash scripts/smoke_e2e.sh "${{ github.workspace }}/dist/dockstudio-backend/dockstudio-backend${{ matrix.os == 'windows-latest' && '.exe' || '' }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dockstudio-backend-${{ matrix.os }}
+          path: dist/dockstudio-backend/
+
+  desktop-build:
+    # M0：Tauri 壳配置骨架验证；本条在 alpha 前允许失败（图标/签名未备）
+    continue-on-error: true
+    needs: package-backend
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-14]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cd apps/web && npm ci && npm run build
+      - name: Stage backend sidecar
+        uses: actions/download-artifact@v4
+        with:
+          name: dockstudio-backend-${{ matrix.os }}
+          path: apps/desktop/src-tauri/binaries
+      - name: Rename sidecar per target triple
+        run: bash scripts/stage_sidecar.sh
+      - run: cd apps/desktop && npm ci && npx tauri build --no-bundle

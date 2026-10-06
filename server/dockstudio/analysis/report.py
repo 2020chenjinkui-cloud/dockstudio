@@ -1,0 +1,207 @@
+"""Self-contained HTML report for a finished docking job (3Dmol.js via CDN)."""
+
+from __future__ import annotations
+
+import html
+import json
+from datetime import datetime
+from pathlib import Path
+
+from ..models import DockJobRequest, DockResult, Interaction, PoseAnalysis, Project
+
+
+def _esc(text: object) -> str:
+    return html.escape(str(text))
+
+
+def _fmt(value: object, ndigits: int = 2) -> str:
+    if value is None:
+        return "—"
+    if isinstance(value, float):
+        return f"{value:.{ndigits}f}"
+    return _esc(value)
+
+
+_TYPE_LABELS = {
+    "hbond": "氢键",
+    "hydrophobic": "疏水接触",
+    "pi_stacking": "π 堆积",
+    "salt_bridge": "盐桥",
+    "halogen": "卤键",
+    "water_bridge": "水桥",
+}
+
+
+def _interactions_rows(interactions: list[Interaction]) -> str:
+    if not interactions:
+        return '<tr><td colspan="4" class="muted">未检测到相互作用</td></tr>'
+    rows = []
+    for i in interactions:
+        rows.append(
+            "<tr>"
+            f"<td>{_esc(_TYPE_LABELS.get(i.type, i.type))}</td>"
+            f"<td>{_esc(i.residue)}</td>"
+            f"<td>{_fmt(i.distance)} Å</td>"
+            f'<td class="muted">{_esc(i.detail)}</td>'
+            "</tr>"
+        )
+    return "\n".join(rows)
+
+
+def _poses_rows(result: DockResult) -> str:
+    rows = []
+    for pose in result.poses:
+        rows.append(
+            "<tr>"
+            f"<td>{pose.index}</td>"
+            f"<td><b>{pose.affinity:.2f}</b></td>"
+            f"<td>{_fmt(pose.rmsd_lb)}</td>"
+            f"<td>{_fmt(pose.rmsd_ub)}</td>"
+            "</tr>"
+        )
+    return "\n".join(rows)
+
+
+def _inline_file(path: Path) -> str:
+    try:
+        return path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
+
+
+def generate_report(
+    project: Project,
+    request: DockJobRequest,
+    result: DockResult,
+    pose_analyses: list[PoseAnalysis],
+    receptor_pdb_path: Path,
+    pose_sdf_paths: list[Path],
+    receptor_name: str,
+    ligand_name: str,
+) -> str:
+    """Render a self-contained HTML report (structures inlined as text)."""
+    top_analysis = pose_analyses[0] if pose_analyses else None
+    receptor_pdb = _inline_file(receptor_pdb_path)
+    top_pose_sdf = _inline_file(pose_sdf_paths[0]) if pose_sdf_paths else ""
+
+    box = result.box
+    params = result.params
+    engine_line = (
+        f"{_esc(result.engine)} {_esc(result.engine_version)} · 打分函数 {_esc(params.scoring)}"
+    )
+    snapshot_rows = [
+        ("项目", project.name),
+        ("生成时间", datetime.now().strftime("%Y-%m-%d %H:%M:%S")),  # noqa: DTZ005
+        ("引擎", engine_line),
+        ("受体", receptor_name),
+        ("配体", ligand_name),
+        ("受体 ID", request.receptor_id),
+        ("配体 ID", request.ligand_id),
+        ("盒子中心", f"({box.center[0]:.2f}, {box.center[1]:.2f}, {box.center[2]:.2f}) Å"),
+        ("盒子尺寸", f"{box.size[0]:.1f} × {box.size[1]:.1f} × {box.size[2]:.1f} Å"),
+        (
+            "采样参数",
+            f"exhaustiveness={params.exhaustiveness}, num_modes={params.num_modes}, "  # noqa: ISC004
+            f"energy_range={params.energy_range}, cpu={params.cpu}, seed={params.seed}",
+        ),
+    ]
+    snapshot_html = "\n".join(
+        f"<tr><th>{_esc(k)}</th><td>{_esc(v)}</td></tr>" for k, v in snapshot_rows
+    )
+
+    receptor_json = json.dumps(receptor_pdb)
+    pose_json = json.dumps(top_pose_sdf)
+
+    return f"""<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>DockStudio 对接报告 — {_esc(project.name)}</title>
+<script src="https://3Dmol.org/build/3Dmol-min.js"></script>
+<style>
+  :root {{ color-scheme: light; }}
+  body {{ font-family: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+         max-width: 960px; margin: 0 auto; padding: 24px; color: #1f2328; }}
+  h1 {{ font-size: 1.6rem; border-bottom: 2px solid #2563eb; padding-bottom: 8px; }}
+  h2 {{ font-size: 1.15rem; margin-top: 28px; color: #1e40af; }}
+  table {{ border-collapse: collapse; width: 100%; margin-top: 8px; }}
+  th, td {{ border: 1px solid #d0d7de; padding: 6px 10px; text-align: left;
+           font-size: 0.92rem; }}
+  th {{ background: #f6f8fa; width: 160px; }}
+  .muted {{ color: #6e7781; }}
+  #viewer {{ width: 100%; height: 420px; position: relative; border: 1px solid #d0d7de;
+             border-radius: 6px; }}
+  .disclaimer {{ background: #fff8e6; border: 1px solid #f0c36d; border-radius: 6px;
+                 padding: 10px 14px; margin-top: 24px; font-size: 0.9rem; }}
+  .refs {{ font-size: 0.85rem; color: #444; }}
+  .refs li {{ margin: 4px 0; }}
+  @media print {{ #viewer {{ page-break-inside: avoid; }} }}
+</style>
+</head>
+<body>
+<h1>分子对接报告</h1>
+
+<h2>任务快照</h2>
+<table>
+{snapshot_html}
+</table>
+
+<h2>姿态打分</h2>
+<table>
+<tr><th style="width:auto">#</th><th style="width:auto">打分 (kcal/mol)</th>
+    <th style="width:auto">RMSD 下界 (Å)</th><th style="width:auto">RMSD 上界 (Å)</th></tr>
+{_poses_rows(result)}
+</table>
+<p class="muted">共 {len(result.poses)} 个姿态，按打分升序。</p>
+
+<h2>Top 姿态相互作用（{_esc(top_analysis.source if top_analysis else "n/a")} 分析）</h2>
+<table>
+<tr><th style="width:auto">类型</th><th style="width:auto">残基</th>
+    <th style="width:auto">距离</th><th style="width:auto">备注</th></tr>
+{_interactions_rows(top_analysis.interactions if top_analysis else [])}
+</table>
+{"".join(f'<p class="muted">警告: {_esc(w)}</p>' for w in (top_analysis.warnings if top_analysis else []))}
+
+<h2>3D 结合模式</h2>
+<div id="viewer"></div>
+<script>
+(function() {{
+  const receptorPDB = {receptor_json};
+  const poseSDF = {pose_json};
+  const viewer = $3Dmol.createViewer("viewer", {{backgroundColor: "white"}});
+  if (receptorPDB) {{
+    viewer.addModel(receptorPDB, "pdb");
+    viewer.setStyle({{model: 0}}, {{cartoon: {{color: "spectrum"}}}});
+  }}
+  if (poseSDF) {{
+    viewer.addModel(poseSDF, "sdf");
+    viewer.setStyle({{model: 1}}, {{stick: {{colorscheme: "greenCarbon"}}}});
+  }}
+  viewer.zoomTo();
+  viewer.render();
+}})();
+</script>
+
+<div class="disclaimer">
+<b>免责声明：</b>对接打分（kcal/mol）是经验打分函数的相对排序指标，
+<b>不是</b>实验结合亲和力实测值，仅可用于同一靶点同一配体系列内的相对比较。
+</div>
+
+<h2>引用</h2>
+<ul class="refs">
+  <li>Eberhardt, J. et al. AutoDock Vina 1.2.0: New Docking Methods, Expanded Force Field,
+      and Python Bindings. <i>J. Chem. Inf. Model.</i> 2021.</li>
+  <li>Trott, O.; Olson, A. J. AutoDock Vina: Improving the Speed and Accuracy of Docking.
+      <i>J. Comput. Chem.</i> 2010.</li>
+  <li>Meeko — Forli Lab, Scripps Research. https://github.com/forlilab/meeko</li>
+  <li>RDKit: Open-source cheminformatics. https://www.rdkit.org</li>
+  <li>Salentin, S. et al. PLIP: fully automated protein-ligand interaction profiler.
+      <i>Nucleic Acids Res.</i> 2015.</li>
+  <li>Rego, N.; Koes, D. 3Dmol.js: molecular visualization with WebGL.
+      <i>Bioinformatics</i> 2015.</li>
+</ul>
+
+<p class="muted">DockStudio v0.2 生成 · {datetime.now().strftime("%Y-%m-%d %H:%M")}</p>
+</body>
+</html>
+"""  # noqa: DTZ005

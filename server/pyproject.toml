@@ -1,0 +1,48 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dockstudio"
+version = "0.1.0"
+description = "Cross-platform molecular docking platform"
+requires-python = ">=3.10"
+dependencies = [
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.29",
+    "pydantic>=2.6",
+    "rdkit>=2024.3",
+    "meeko>=0.5",
+    "scipy>=1.11",
+    "gemmi>=0.6",
+    "openbabel-wheel>=3.1.1",
+    "python-multipart>=0.0.9",  # FastAPI form/file uploads
+    "plip>=3.0",  # protein-ligand interaction profiling (builtin geometric fallback kept)
+]
+
+[project.optional-dependencies]
+dev = [
+    "vina>=1.2.5; platform_system != 'Windows'",  # PyPI wheel 不含 Windows
+
+    "pytest>=8.0",
+    "httpx>=0.27",
+    "ruff>=0.4",
+    "mypy>=1.9",
+]
+
+[project.scripts]
+dockstudio-server = "dockstudio.api.app:main"
+
+[tool.setuptools.packages.find]
+include = ["dockstudio*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint.per-file-ignores]
+# frozen groundwork file, kept verbatim per project constraint
+"dockstudio/config.py" = ["UP037"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
