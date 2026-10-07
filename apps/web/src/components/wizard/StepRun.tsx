@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { cancelJob, createFlexReceptor, createJob, subscribeJob } from '../../api';
 import { parseFlexInput, validateFlexResidues } from '../../flex';
-import { PARAM_HELP } from '../../helpText';
-import { isTerminalStatus, stageLabel, statusLabel } from '../../labels';
+import { useI18n } from '../../i18n';
+import { isTerminalStatus } from '../../labels';
 import type { DockParams, EngineManifest, Job } from '../../types';
 import Tooltip from '../Tooltip';
 import type { WizardData } from './Wizard';
@@ -30,6 +30,7 @@ export default function StepRun({
   onJobUpdate,
   onCompleted,
 }: StepRunProps) {
+  const { t } = useI18n();
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [flexNote, setFlexNote] = useState<string | null>(null);
@@ -39,7 +40,7 @@ export default function StepRun({
   const completedRef = useRef(false);
 
   const scoringOptions = useMemo(
-    () => [...new Set(engines.flatMap((e) => e.scoring_functions))],
+    () => [...new Set(engines.filter((e) => e.available).flatMap((e) => e.scoring_functions))],
     [engines],
   );
   const scoringList = scoringOptions.includes(data.params.scoring)
@@ -128,7 +129,7 @@ export default function StepRun({
           <label>
             <span className="control-row">
               exhaustiveness (1-64)
-              <Tooltip text={PARAM_HELP.exhaustiveness} />
+              <Tooltip text={t('help.exhaustiveness')} />
             </span>
             <input
               type="number"
@@ -146,7 +147,7 @@ export default function StepRun({
           <label>
             <span className="control-row">
               num_modes
-              <Tooltip text={PARAM_HELP.num_modes} />
+              <Tooltip text={t('help.num_modes')} />
             </span>
             <input
               type="number"
@@ -158,7 +159,7 @@ export default function StepRun({
           <label>
             <span className="control-row">
               cpu
-              <Tooltip text={PARAM_HELP.cpu} />
+              <Tooltip text={t('help.cpu')} />
             </span>
             <input
               type="number"
@@ -170,7 +171,7 @@ export default function StepRun({
           <label>
             <span className="control-row">
               scoring
-              <Tooltip text={PARAM_HELP.scoring} />
+              <Tooltip text={t('help.scoring')} />
             </span>
             <select
               value={data.params.scoring}
@@ -188,7 +189,7 @@ export default function StepRun({
               <label>
                 <span className="control-row">
                   energy_range
-                  <Tooltip text={PARAM_HELP.energyRange} />
+                  <Tooltip text={t('help.energyRange')} />
                 </span>
                 <input
                   type="number"
@@ -203,7 +204,7 @@ export default function StepRun({
               <label>
                 <span className="control-row">
                   seed（留空随机）
-                  <Tooltip text={PARAM_HELP.seed} />
+                  <Tooltip text={t('help.seed')} />
                 </span>
                 <input
                   type="text"
@@ -225,7 +226,7 @@ export default function StepRun({
           <div className="flex-card">
             <div className="control-row">
               <span>柔性残基（最多 10 个）</span>
-              <Tooltip text={PARAM_HELP.flexResidues} />
+              <Tooltip text={t('help.flexResidues')} />
             </div>
             <input
               type="text"
@@ -269,8 +270,8 @@ export default function StepRun({
     <div className="step-body">
       {flexNote && <p className="ok-text">{flexNote}</p>}
       <div className="progress-head">
-        <span className={`badge status-${status}`}>{statusLabel(status)}</span>
-        <span>{progress ? stageLabel(progress.stage) : '连接中…'}</span>
+        <span className={`badge status-${status}`}>{t(`status.${status}`, status)}</span>
+        <span>{progress ? t(`stage.${progress.stage}`, progress.stage) : '连接中…'}</span>
         <span className="muted mono">job {data.jobId.slice(0, 8)}</span>
       </div>
       <div className="progress-bar">

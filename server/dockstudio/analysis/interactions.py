@@ -11,7 +11,7 @@ from openbabel import pybel
 from rdkit import Chem
 
 from ..logging import get_logger
-from ..models import Interaction, PoseAnalysis
+from ..models import Box, Interaction, PoseAnalysis
 
 log = get_logger("analysis.interactions")
 
@@ -320,21 +320,39 @@ def analyze_pose(
     pose_sdf: Path,
     work_dir: Path,
     use_plip: bool = True,
+    box: Box | None = None,
 ) -> PoseAnalysis:
     """Analyze one pose against the protein. Tries PLIP, falls back to builtin."""
+    from .posecheck import check_pose
+
     pose_idx = int(pose_sdf.stem.rsplit("_", 1)[-1]) if "_" in pose_sdf.stem else 1
     warnings: list[str] = []
+    pose_check = None
+    try:
+        pose_check = check_pose(pose_sdf, box=box, pose_index=pose_idx)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("pose check failed (non-fatal): %s", exc)
+        warnings.append(f"姿态质检失败（不影响分析）: {exc}")
     if use_plip and _plip_available():
         try:
             interactions = _run_plip(protein_pdb, pose_sdf, work_dir)
-            analysis = PoseAnalysis(pose_index=pose_idx, source="plip", interactions=interactions)
-            return analysis
+            return PoseAnalysis(
+                pose_index=pose_idx,
+                source="plip",
+                interactions=interactions,
+                pose_check=pose_check,
+                warnings=warnings,
+            )
         except Exception as exc:  # noqa: BLE001
             log.warning("PLIP failed, falling back to builtin: %s", exc)
             warnings.append(f"PLIP 失败，使用内置几何检测: {exc}")
     interactions = _run_builtin(protein_pdb, pose_sdf)
     return PoseAnalysis(
-        pose_index=pose_idx, source="builtin", interactions=interactions, warnings=warnings
+        pose_index=pose_idx,
+        source="builtin",
+        interactions=interactions,
+        warnings=warnings,
+        pose_check=pose_check,
     )
 
 
@@ -344,6 +362,7 @@ def analyze_job_poses(
     job_dir: Path,
     use_plip: bool = True,
     pose_indices: list[int] | None = None,
+    box: Box | None = None,
 ) -> list[PoseAnalysis]:
     """Analyze (and cache under job_dir/analysis/) the given poses."""
     cache_dir = job_dir / "analysis"
@@ -358,7 +377,7 @@ def analyze_job_poses(
                 continue
             except (json.JSONDecodeError, ValueError):
                 pass
-        analysis = analyze_pose(protein_pdb, pose_path, job_dir, use_plip=use_plip)
+        analysis = analyze_pose(protein_pdb, pose_path, job_dir, use_plip=use_plip, box=box)
         cache_path.write_text(analysis.model_dump_json(indent=2), encoding="utf-8")
         analyses.append(analysis)
     return analyses

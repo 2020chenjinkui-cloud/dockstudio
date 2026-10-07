@@ -360,23 +360,84 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             [pose_paths[pose_index - 1]],
             job_dir,
             pose_indices=[pose_index],
+            box=job.result.box,
         )
         return analyses[0]
 
-    # ------------------------------------------------------------- M1: report
+    def _diagram_for_job(job: Job, pose_index: int) -> str:
+        """SVG of the 2D interaction diagram, cached under job dir."""
+        pose_paths = _job_pose_paths(job)
+        protein_pdb = _job_protein_pdb(registry, job)
+        job_dir = store.job_dir(job.project_id, job.id)
+        cache_path = job_dir / "analysis" / f"diagram_pose_{pose_index}.svg"
+        if cache_path.is_file():
+            return cache_path.read_text(encoding="utf-8")
+        analysis = analyze_job_poses(
+            protein_pdb,
+            [pose_paths[pose_index - 1]],
+            job_dir,
+            pose_indices=[pose_index],
+            box=job.result.box if job.result else None,
+        )[0]
+        from ..analysis.diagram import generate_diagram_svg
 
-    @app.get("/api/jobs/{jid}/report", response_class=HTMLResponse)
-    async def job_report(jid: str) -> Response:
+        ligand = registry.ligands.get(job.request.ligand_id)
+        svg = generate_diagram_svg(
+            pose_paths[pose_index - 1],
+            analysis.interactions,
+            title=(ligand.name or ligand.id) if ligand else job.request.ligand_id,
+        )
+        cache_path.write_text(svg, encoding="utf-8")
+        return svg
+
+    # ------------------------------------------------------------- M3: diagram
+
+    @app.get("/api/jobs/{jid}/diagram")
+    async def job_diagram(jid: str, pose_index: int = Query(default=1, ge=1)):
         job = runner.get_job(jid)
         if job is None:
             return _not_found("job")
         if job.status != JobStatus.completed or job.result is None:
             return _error(400, f"job is not completed (status={job.status.value})")
+        if not (1 <= pose_index <= len(_job_pose_paths(job))):
+            return _error(400, f"pose_index out of range (1..{len(_job_pose_paths(job))})")
+        return Response(_diagram_for_job(job, pose_index), media_type="image/svg+xml")
+
+    # ------------------------------------------------------------- M1: report
+
+    @app.get("/api/jobs/{jid}/report", response_class=HTMLResponse)
+    async def job_report(
+        jid: str,
+        sections: str | None = Query(default=None),
+        title: str | None = Query(default=None, max_length=80),
+    ) -> Response:
+        job = runner.get_job(jid)
+        if job is None:
+            return _not_found("job")
+        if job.status != JobStatus.completed or job.result is None:
+            return _error(400, f"job is not completed (status={job.status.value})")
+        from ..analysis.report import ALL_SECTIONS
+
+        selected: list[str] | None = None
+        if sections:
+            selected = [s.strip() for s in sections.split(",") if s.strip()]
+            invalid = [s for s in selected if s not in ALL_SECTIONS]
+            if invalid:
+                return _error(400, f"非法 section: {invalid}（可选: {', '.join(ALL_SECTIONS)}）")
         project = store.get(job.project_id)
         pose_paths = _job_pose_paths(job)
         job_dir = store.job_dir(job.project_id, job.id)
         protein_pdb = _job_protein_pdb(registry, job)
-        analyses = analyze_job_poses(protein_pdb, pose_paths[:1], job_dir, pose_indices=[1])
+        box = job.result.box
+        analyses = analyze_job_poses(
+            protein_pdb, pose_paths[:1], job_dir, pose_indices=[1], box=box
+        )
+        diagram_svg = ""
+        if selected is None or "diagram" in selected:
+            try:
+                diagram_svg = _diagram_for_job(job, 1)
+            except Exception as exc:  # noqa: BLE001
+                log.warning("diagram generation failed (non-fatal): %s", exc)
         ligand = registry.ligands.get(job.request.ligand_id)
         if project is None:  # project was soft-deleted; build a transient shell
             project = Project(
@@ -394,11 +455,74 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             pose_sdf_paths=pose_paths,
             receptor_name=job.request.receptor_id,
             ligand_name=(ligand.name or ligand.id) if ligand else job.request.ligand_id,
+            sections=selected,
+            title=title,
+            diagram_svg=diagram_svg,
         )
         return HTMLResponse(
             report_html,
             headers={"Content-Disposition": f'attachment; filename="dockstudio-report-{jid}.html"'},
         )
+
+    # ------------------------------------------------------------- M3: compare & stats
+
+    @app.get("/api/compare")
+    async def compare_jobs(job_ids: str = Query(default="")):
+        from ..models import ComparisonResult, ComparisonRow
+
+        rows: list[ComparisonRow] = []
+        for jid in [s.strip() for s in job_ids.split(",") if s.strip()]:
+            job = runner.get_job(jid)
+            if job is None:
+                continue
+            ligand = registry.ligands.get(job.request.ligand_id)
+            poses = job.result.poses if job.result else []
+            rows.append(
+                ComparisonRow(
+                    job_id=job.id,
+                    ligand_id=job.request.ligand_id,
+                    ligand_name=ligand.name if ligand else None,
+                    smiles=ligand.smiles if ligand else None,
+                    engine=job.request.engine,
+                    scoring=job.request.params.scoring,
+                    exhaustiveness=job.request.params.exhaustiveness,
+                    top_affinity=poses[0].affinity if poses else None,
+                    n_poses=len(poses),
+                    status=job.status,
+                )
+            )
+        return ComparisonResult(rows=rows)
+
+    @app.get("/api/stats")
+    async def stats() -> dict:
+        projects = store.list()
+        all_jobs: list[Job] = []
+        for p in projects:
+            all_jobs.extend(store.list_jobs(p.id))
+        batches_path = settings.data_dir / "projects" / "batches.json"
+        n_batches = 0
+        if batches_path.is_file():
+            try:
+                n_batches = len(json.loads(batches_path.read_text(encoding="utf-8")))
+            except (OSError, json.JSONDecodeError):
+                n_batches = 0
+        completed = [j for j in all_jobs if j.status == JobStatus.completed]
+        durations = [
+            (j.finished_at - j.started_at).total_seconds()
+            for j in completed
+            if j.started_at and j.finished_at
+        ]
+        by_engine: dict[str, int] = {}
+        for j in all_jobs:
+            by_engine[j.request.engine] = by_engine.get(j.request.engine, 0) + 1
+        return {
+            "projects": len(projects),
+            "jobs": len(all_jobs),
+            "batches": n_batches,
+            "completed_jobs": len(completed),
+            "avg_dock_seconds": (round(sum(durations) / len(durations), 2) if durations else None),
+            "by_engine": by_engine,
+        }
 
     # ------------------------------------------------------------- M1: WebSocket
 

@@ -1060,3 +1060,191 @@ button.danger-outline {
   word-break: break-all;
   margin: 6px 0 0;
 }
+
+/* ---- M3 / v0.4 ---- */
+
+.bar-right {
+  margin-left: auto;
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+
+.bar-right .backend-status {
+  margin-left: 0;
+}
+
+.lang-switch {
+  display: flex;
+  gap: 4px;
+}
+
+.stats-chip {
+  font-size: 12.5px;
+  color: #8b98ab;
+  cursor: default;
+}
+
+/* 姿态质检 */
+
+.badge.qc-ok {
+  color: #58c472;
+  border-color: #3f7a50;
+  cursor: pointer;
+  background: none;
+}
+
+.badge.qc-info {
+  color: #9fb4d0;
+  border-color: #3b4757;
+  cursor: pointer;
+  background: none;
+}
+
+.badge.qc-warning {
+  color: #e0c07f;
+  border-color: #6b5a33;
+  cursor: pointer;
+  background: none;
+}
+
+.badge.qc-error {
+  color: #f08a97;
+  border-color: #7a3542;
+  cursor: pointer;
+  background: none;
+}
+
+.badge.qc-open {
+  outline: 1px solid #2f6fed;
+}
+
+.check-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: #b6c2d4;
+  cursor: pointer;
+}
+
+.popover-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 45;
+}
+
+.popover {
+  background: #1a2029;
+  border: 1px solid #2a3342;
+  border-radius: 8px;
+  padding: 16px 18px;
+  width: 460px;
+  max-width: calc(100vw - 40px);
+  max-height: 70vh;
+  overflow-y: auto;
+}
+
+.popover h4 {
+  margin: 0;
+}
+
+.issue-list {
+  list-style: none;
+  margin: 10px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.issue-list li {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  font-size: 13px;
+}
+
+/* 2D 示意图 */
+
+.results-tabs {
+  margin-top: 16px;
+  margin-bottom: 10px;
+}
+
+.diagram-box {
+  background: #ffffff;
+  border-radius: 8px;
+  min-height: 240px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 12px;
+}
+
+.diagram-box img {
+  max-width: 100%;
+  height: auto;
+}
+
+.diagram-box .muted {
+  color: #5a6578;
+}
+
+/* 报告弹窗 */
+
+.section-checks {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  margin: 10px 0 14px;
+}
+
+/* 对比 */
+
+.compare-modal {
+  width: min(960px, calc(100vw - 40px));
+}
+
+.table-scroll {
+  overflow-x: auto;
+}
+
+.best-cell {
+  font-weight: 700;
+  color: #8fd18f;
+}
+
+.job-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.cmp-check {
+  flex: 0 0 auto;
+}
+
+.drawer-body {
+  flex: 1;
+  overflow-y: auto;
+}
+
+.drawer {
+  display: flex;
+  flex-direction: column;
+}
+
+.drawer-foot {
+  border-top: 1px solid #2a3342;
+  padding-top: 12px;
+  margin-top: 12px;
+}
+
+.cmp-button {
+  width: 100%;
+}

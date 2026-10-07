@@ -4,6 +4,7 @@ import type {
   BatchEvent,
   BatchResults,
   BatchSummary,
+  ComparisonResult,
   CreateBatchResponse,
   CreateJobResponse,
   DockRequest,
@@ -20,6 +21,7 @@ import type {
   PreparedReceptor,
   Project,
   ProjectDetail,
+  Stats,
 } from './types';
 
 export class ApiError extends Error {
@@ -383,4 +385,45 @@ export function subscribeBatch(bid: string, handlers: BatchSubscription): () => 
   }
 
   return stop;
+}
+
+// ---- 姿态质检 / 2D 图 ----
+
+export function diagramUrl(jid: string, poseIndex: number): string {
+  return `/api/jobs/${jid}/diagram?pose_index=${poseIndex}`;
+}
+
+// ---- 报告 v2 ----
+
+export interface ReportOptions {
+  sections?: string[];
+  title?: string;
+}
+
+export function buildReportQuery(options: ReportOptions): string {
+  const params = new URLSearchParams();
+  if (options.sections && options.sections.length > 0) {
+    params.set('sections', options.sections.join(','));
+  }
+  if (options.title && options.title.trim()) {
+    params.set('title', options.title.trim());
+  }
+  return params.toString();
+}
+
+export function reportUrlV2(jid: string, options: ReportOptions = {}): string {
+  const qs = buildReportQuery(options);
+  return `/api/jobs/${jid}/report${qs ? `?${qs}` : ''}`;
+}
+
+// ---- 结果对比 ----
+
+export async function compareJobs(jobIds: string[]): Promise<ComparisonResult> {
+  return req<ComparisonResult>(`/api/compare?job_ids=${jobIds.map(encodeURIComponent).join(',')}`);
+}
+
+// ---- 统计 ----
+
+export async function getStats(): Promise<Stats> {
+  return req<Stats>('/api/stats');
 }

@@ -178,3 +178,38 @@ describe('api v0.3', () => {
     expect(JSON.parse(init.body as string)).toEqual(body);
   });
 });
+
+describe('api v0.4', () => {
+  it('buildReportQuery 拼接 sections 与 title', async () => {
+    const { buildReportQuery } = await import('./api');
+    expect(buildReportQuery({ sections: ['scores', 'diagram'], title: '我的报告' })).toBe(
+      `sections=${encodeURIComponent('scores,diagram')}&title=${encodeURIComponent('我的报告')}`,
+    );
+  });
+
+  it('buildReportQuery 空 sections / 空 title 时不带参数', async () => {
+    const { buildReportQuery } = await import('./api');
+    expect(buildReportQuery({ sections: [], title: '  ' })).toBe('');
+    expect(buildReportQuery({})).toBe('');
+  });
+
+  it('reportUrlV2 组合路径与查询串', async () => {
+    const { reportUrlV2 } = await import('./api');
+    expect(reportUrlV2('j1', { sections: ['scores'] })).toBe('/api/jobs/j1/report?sections=scores');
+    expect(reportUrlV2('j1')).toBe('/api/jobs/j1/report');
+  });
+
+  it('diagramUrl 拼 pose_index', async () => {
+    const { diagramUrl } = await import('./api');
+    expect(diagramUrl('j1', 3)).toBe('/api/jobs/j1/diagram?pose_index=3');
+  });
+
+  it('compareJobs 用逗号拼 job_ids', async () => {
+    const spy = vi.fn().mockResolvedValue(jsonResponse({ rows: [] }));
+    vi.stubGlobal('fetch', spy);
+    const { compareJobs } = await import('./api');
+    await compareJobs(['a', 'b', 'c']);
+    const [url] = spy.mock.calls[0] as [string];
+    expect(url).toBe('/api/compare?job_ids=a,b,c');
+  });
+});

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   createProject,
   deleteProject,
@@ -6,19 +6,37 @@ import {
   getHealth,
   listProjects,
 } from './api';
+import CompareDialog from './components/CompareDialog';
 import OnboardingOverlay, { ONBOARDING_KEY } from './components/OnboardingOverlay';
 import ProjectBar from './components/ProjectBar';
 import Wizard from './components/wizard/Wizard';
 import DebugPage from './DebugPage';
+import { I18nContext, LANG_KEY, translate, type Lang } from './i18n';
 import { useRoute } from './router';
 import type { EngineManifest, Project } from './types';
 
 export default function App() {
   const route = useRoute();
-  if (route.startsWith('/debug')) {
-    return <DebugPage />;
-  }
-  return <WizardPage />;
+  const [lang, setLangState] = useState<Lang>(() => {
+    const saved = localStorage.getItem(LANG_KEY);
+    return saved === 'en' ? 'en' : 'zh';
+  });
+
+  const setLang = useCallback((next: Lang) => {
+    localStorage.setItem(LANG_KEY, next);
+    setLangState(next);
+  }, []);
+
+  const i18n = useMemo(
+    () => ({ lang, setLang, t: (key: string, fallback?: string) => translate(lang, key, fallback) }),
+    [lang, setLang],
+  );
+
+  return (
+    <I18nContext.Provider value={i18n}>
+      {route.startsWith('/debug') ? <DebugPage /> : <WizardPage />}
+    </I18nContext.Provider>
+  );
 }
 
 function WizardPage() {
@@ -28,6 +46,8 @@ function WizardPage() {
   const [backendOk, setBackendOk] = useState(false);
   const [resumeJobId, setResumeJobId] = useState<string | null>(null);
   const [resumeBatchId, setResumeBatchId] = useState<string | null>(null);
+  const [compareIds, setCompareIds] = useState<string[]>([]);
+  const [compareOpen, setCompareOpen] = useState(false);
   const [newName, setNewName] = useState('');
   const [createError, setCreateError] = useState<string | null>(null);
   const [showOnboarding, setShowOnboarding] = useState(
@@ -67,6 +87,7 @@ function WizardPage() {
     await deleteProject(currentId);
     setResumeJobId(null);
     setResumeBatchId(null);
+    setCompareIds([]);
     await refreshProjects();
   }, [currentId, refreshProjects]);
 
@@ -94,10 +115,14 @@ function WizardPage() {
         projects={projects ?? []}
         current={current}
         backendOk={backendOk}
+        compareIds={compareIds}
+        onCompareIdsChange={setCompareIds}
+        onOpenCompare={() => setCompareOpen(true)}
         onSelect={(id) => {
           setCurrentId(id);
           setResumeJobId(null);
           setResumeBatchId(null);
+          setCompareIds([]);
         }}
         onCreate={handleCreate}
         onDelete={handleDelete}
@@ -154,6 +179,9 @@ function WizardPage() {
         )}
       </main>
       {showOnboarding && <OnboardingOverlay onDone={closeOnboarding} />}
+      {compareOpen && (
+        <CompareDialog jobIds={compareIds} onClose={() => setCompareOpen(false)} />
+      )}
     </div>
   );
 }

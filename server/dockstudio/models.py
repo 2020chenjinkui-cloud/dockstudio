@@ -168,6 +168,7 @@ class PoseAnalysis(BaseModel):
     source: str = "builtin"  # plip | builtin
     interactions: list[Interaction] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
+    pose_check: PoseCheck | None = None  # M3，质检结果随分析返回（可空）
 
 
 # ---------------------------------------------------------------------------
@@ -221,6 +222,40 @@ class BatchRow(BaseModel):
     status: JobStatus
     top_affinity: float | None = None
     error: str | None = None
+
+
+# ---------------------------------------------------------------------------
+# M3: 姿态质检与结果对比
+
+
+class PoseCheckIssue(BaseModel):
+    rule: str  # e.g. "clash" | "bond_length" | "posebusters:..."
+    severity: str = "warning"  # info|warning|error
+    message: str = ""
+
+
+class PoseCheck(BaseModel):
+    pose_index: int
+    ok: bool
+    source: str = "posebusters"  # posebusters | builtin
+    issues: list[PoseCheckIssue] = Field(default_factory=list)
+
+
+class ComparisonRow(BaseModel):
+    job_id: str
+    ligand_id: str
+    ligand_name: str | None = None
+    smiles: str | None = None
+    engine: str
+    scoring: str
+    exhaustiveness: int
+    top_affinity: float | None = None
+    n_poses: int = 0
+    status: JobStatus
+
+
+class ComparisonResult(BaseModel):
+    rows: list[ComparisonRow] = Field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------

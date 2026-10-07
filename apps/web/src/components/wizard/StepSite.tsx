@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { fetchFile, predictPockets } from '../../api';
-import { PARAM_HELP } from '../../helpText';
+import { useI18n } from '../../i18n';
 import MolViewer from '../../MolViewer';
 import type { DockBox, Pocket, PreparedReceptor } from '../../types';
 import Tooltip from '../Tooltip';
@@ -15,6 +15,7 @@ const AXES = ['x', 'y', 'z'] as const;
 const AUTO_SIZE = 22.5;
 
 export default function StepSite({ receptor, box, onBoxChange }: StepSiteProps) {
+  const { t } = useI18n();
   const [receptorPdb, setReceptorPdb] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [pockets, setPockets] = useState<Pocket[] | null>(null);
@@ -83,7 +84,7 @@ export default function StepSite({ receptor, box, onBoxChange }: StepSiteProps) 
         <div className="site-controls">
           <div className="control-row">
             <span>中心（Å）</span>
-            <Tooltip text={PARAM_HELP.boxCenter} />
+            <Tooltip text={t('help.boxCenter')} />
           </div>
           <div className="triple">
             {AXES.map((axis, i) => (
@@ -100,7 +101,7 @@ export default function StepSite({ receptor, box, onBoxChange }: StepSiteProps) 
           </div>
           <div className="control-row">
             <span>尺寸（Å）</span>
-            <Tooltip text={PARAM_HELP.boxSize} />
+            <Tooltip text={t('help.boxSize')} />
           </div>
           <div className="triple">
             {AXES.map((axis, i) => (

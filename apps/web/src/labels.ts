@@ -56,3 +56,31 @@ export function parseResidue(label: string): ResidueRef | null {
   if (m[3]) ref.chain = m[3];
   return ref;
 }
+
+// ---- 姿态质检徽章 ----
+
+const SEVERITY_RANK: Record<string, number> = { info: 0, warning: 1, error: 2 };
+
+export function worstSeverity(issues: { severity: string }[]): string | null {
+  if (issues.length === 0) return null;
+  let worst = issues[0].severity;
+  for (const issue of issues) {
+    if (worst === undefined || (SEVERITY_RANK[issue.severity] ?? 0) > (SEVERITY_RANK[worst] ?? 0)) {
+      worst = issue.severity;
+    }
+  }
+  return worst;
+}
+
+export type PoseCheckBadgeKind = 'ok' | 'error' | 'warning' | 'info' | 'none';
+
+export function poseCheckBadge(
+  check: { ok: boolean; issues: { severity: string }[] } | null | undefined,
+): PoseCheckBadgeKind {
+  if (!check) return 'none';
+  if (check.ok) return 'ok';
+  const worst = worstSeverity(check.issues);
+  if (worst === 'error') return 'error';
+  if (worst === 'warning') return 'warning';
+  return 'info';
+}

@@ -1,4 +1,6 @@
-"""Self-contained HTML report for a finished docking job (3Dmol.js via CDN)."""
+"""Self-contained HTML report for a finished docking job (3Dmol.js via CDN).
+
+M3 ("report v2"): optional section filtering (`sections`) and custom title."""
 
 from __future__ import annotations
 
@@ -8,6 +10,8 @@ from datetime import datetime
 from pathlib import Path
 
 from ..models import DockJobRequest, DockResult, Interaction, PoseAnalysis, Project
+
+ALL_SECTIONS = ("snapshot", "scores", "interactions", "diagram", "viewer3d", "disclaimer")
 
 
 def _esc(text: object) -> str:
@@ -62,6 +66,24 @@ def _poses_rows(result: DockResult) -> str:
     return "\n".join(rows)
 
 
+def _pose_check_html(analysis: PoseAnalysis | None) -> str:
+    if analysis is None or analysis.pose_check is None:
+        return ""
+    pc = analysis.pose_check
+    badge = "✅ 通过" if pc.ok else "❌ 未通过"
+    rows = (
+        "".join(
+            f"<tr><td>{_esc(i.rule)}</td><td>{_esc(i.severity)}</td><td>{_esc(i.message)}</td></tr>"
+            for i in pc.issues
+        )
+        or '<tr><td colspan="3" class="muted">未发现问题</td></tr>'
+    )
+    return (
+        f"<h3>姿态质检（{_esc(pc.source)}）：{badge}</h3>"
+        f"<table><tr><th>规则</th><th>级别</th><th>说明</th></tr>{rows}</table>"
+    )
+
+
 def _inline_file(path: Path) -> str:
     try:
         return path.read_text(encoding="utf-8", errors="replace")
@@ -78,11 +100,18 @@ def generate_report(
     pose_sdf_paths: list[Path],
     receptor_name: str,
     ligand_name: str,
+    sections: list[str] | None = None,
+    title: str | None = None,
+    diagram_svg: str = "",
 ) -> str:
-    """Render a self-contained HTML report (structures inlined as text)."""
+    """Render a self-contained HTML report (structures inlined as text).
+
+    `sections` selects a subset of ALL_SECTIONS (default: all)."""
+    want = set(sections) if sections else set(ALL_SECTIONS)
     top_analysis = pose_analyses[0] if pose_analyses else None
     receptor_pdb = _inline_file(receptor_pdb_path)
     top_pose_sdf = _inline_file(pose_sdf_paths[0]) if pose_sdf_paths else ""
+    report_title = (title or "").strip()[:80] or f"{project.name} 分子对接报告"
 
     box = result.box
     params = result.params
@@ -108,15 +137,77 @@ def generate_report(
     snapshot_html = "\n".join(
         f"<tr><th>{_esc(k)}</th><td>{_esc(v)}</td></tr>" for k, v in snapshot_rows
     )
+    NOW_TAG = datetime.now().strftime("%Y-%m-%d %H:%M")  # noqa: DTZ005
 
-    receptor_json = json.dumps(receptor_pdb)
-    pose_json = json.dumps(top_pose_sdf)
+    snapshot_block = ""
+    if "snapshot" in want:
+        snapshot_block = f"<h2>任务快照</h2>\n<table>\n{snapshot_html}\n</table>\n"
+
+    scores_block = ""
+    if "scores" in want:
+        scores_block = (
+            "<h2>姿态打分</h2>\n<table>\n"
+            '<tr><th style="width:auto">#</th><th style="width:auto">打分 (kcal/mol)</th>\n'
+            '    <th style="width:auto">RMSD 下界 (Å)</th><th style="width:auto">RMSD 上界 (Å)</th></tr>\n'
+            f"{_poses_rows(result)}\n</table>\n"
+            f'<p class="muted">共 {len(result.poses)} 个姿态，按打分升序。</p>\n'
+        )
+
+    interactions_block = ""
+    if "interactions" in want:
+        warnings_html = "".join(
+            f'<p class="muted">警告: {_esc(w)}</p>'
+            for w in (top_analysis.warnings if top_analysis else [])
+        )
+        interactions_block = (
+            f"<h2>Top 姿态相互作用（{_esc(top_analysis.source if top_analysis else 'n/a')} 分析）</h2>\n"
+            "<table>\n"
+            '<tr><th style="width:auto">类型</th><th style="width:auto">残基</th>\n'
+            '    <th style="width:auto">距离</th><th style="width:auto">备注</th></tr>\n'
+            f"{_interactions_rows(top_analysis.interactions if top_analysis else [])}\n</table>\n"
+            f"{warnings_html}\n{_pose_check_html(top_analysis)}\n"
+        )
+
+    diagram_block = ""
+    if "diagram" in want and diagram_svg:
+        diagram_block = f"<h2>2D 相互作用示意图</h2>\n{diagram_svg}\n"
+
+    viewer_block = ""
+    if "viewer3d" in want:
+        receptor_json = json.dumps(receptor_pdb)
+        pose_json = json.dumps(top_pose_sdf)
+        viewer_block = (
+            "<h2>3D 结合模式</h2>\n"
+            '<div id="viewer"></div>\n'
+            "<script>\n(function() {\n"
+            f"  const receptorPDB = {receptor_json};\n"
+            f"  const poseSDF = {pose_json};\n"
+            '  const viewer = $3Dmol.createViewer("viewer", {backgroundColor: "white"});\n'
+            "  if (receptorPDB) {\n"
+            '    viewer.addModel(receptorPDB, "pdb");\n'
+            '    viewer.setStyle({model: 0}, {cartoon: {color: "spectrum"}});\n'
+            "  }\n"
+            "  if (poseSDF) {\n"
+            '    viewer.addModel(poseSDF, "sdf");\n'
+            '    viewer.setStyle({model: 1}, {stick: {colorscheme: "greenCarbon"}});\n'
+            "  }\n"
+            "  viewer.zoomTo();\n"
+            "  viewer.render();\n"
+            "})();\n</script>\n"
+        )
+
+    disclaimer_block = ""
+    if "disclaimer" in want:
+        disclaimer_block = (
+            '<div class="disclaimer">\n<b>免责声明：</b>对接打分（kcal/mol）是经验打分函数的相对排序指标，\n'
+            "<b>不是</b>实验结合亲和力实测值，仅可用于同一靶点同一配体系列内的相对比较。\n</div>\n"
+        )
 
     return f"""<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
-<title>DockStudio 对接报告 — {_esc(project.name)}</title>
+<title>{_esc(report_title)} — DockStudio</title>
 <script src="https://3Dmol.org/build/3Dmol-min.js"></script>
 <style>
   :root {{ color-scheme: light; }}
@@ -124,6 +215,7 @@ def generate_report(
          max-width: 960px; margin: 0 auto; padding: 24px; color: #1f2328; }}
   h1 {{ font-size: 1.6rem; border-bottom: 2px solid #2563eb; padding-bottom: 8px; }}
   h2 {{ font-size: 1.15rem; margin-top: 28px; color: #1e40af; }}
+  h3 {{ font-size: 1.0rem; margin-top: 18px; color: #334; }}
   table {{ border-collapse: collapse; width: 100%; margin-top: 8px; }}
   th, td {{ border: 1px solid #d0d7de; padding: 6px 10px; text-align: left;
            font-size: 0.92rem; }}
@@ -139,53 +231,14 @@ def generate_report(
 </style>
 </head>
 <body>
-<h1>分子对接报告</h1>
+<h1>{_esc(report_title)}</h1>
 
-<h2>任务快照</h2>
-<table>
-{snapshot_html}
-</table>
-
-<h2>姿态打分</h2>
-<table>
-<tr><th style="width:auto">#</th><th style="width:auto">打分 (kcal/mol)</th>
-    <th style="width:auto">RMSD 下界 (Å)</th><th style="width:auto">RMSD 上界 (Å)</th></tr>
-{_poses_rows(result)}
-</table>
-<p class="muted">共 {len(result.poses)} 个姿态，按打分升序。</p>
-
-<h2>Top 姿态相互作用（{_esc(top_analysis.source if top_analysis else "n/a")} 分析）</h2>
-<table>
-<tr><th style="width:auto">类型</th><th style="width:auto">残基</th>
-    <th style="width:auto">距离</th><th style="width:auto">备注</th></tr>
-{_interactions_rows(top_analysis.interactions if top_analysis else [])}
-</table>
-{"".join(f'<p class="muted">警告: {_esc(w)}</p>' for w in (top_analysis.warnings if top_analysis else []))}
-
-<h2>3D 结合模式</h2>
-<div id="viewer"></div>
-<script>
-(function() {{
-  const receptorPDB = {receptor_json};
-  const poseSDF = {pose_json};
-  const viewer = $3Dmol.createViewer("viewer", {{backgroundColor: "white"}});
-  if (receptorPDB) {{
-    viewer.addModel(receptorPDB, "pdb");
-    viewer.setStyle({{model: 0}}, {{cartoon: {{color: "spectrum"}}}});
-  }}
-  if (poseSDF) {{
-    viewer.addModel(poseSDF, "sdf");
-    viewer.setStyle({{model: 1}}, {{stick: {{colorscheme: "greenCarbon"}}}});
-  }}
-  viewer.zoomTo();
-  viewer.render();
-}})();
-</script>
-
-<div class="disclaimer">
-<b>免责声明：</b>对接打分（kcal/mol）是经验打分函数的相对排序指标，
-<b>不是</b>实验结合亲和力实测值，仅可用于同一靶点同一配体系列内的相对比较。
-</div>
+{snapshot_block}
+{scores_block}
+{interactions_block}
+{diagram_block}
+{viewer_block}
+{disclaimer_block}
 
 <h2>引用</h2>
 <ul class="refs">
@@ -201,7 +254,7 @@ def generate_report(
       <i>Bioinformatics</i> 2015.</li>
 </ul>
 
-<p class="muted">DockStudio v0.2 生成 · {datetime.now().strftime("%Y-%m-%d %H:%M")}</p>
+<p class="muted">DockStudio v0.4 生成 · {NOW_TAG}</p>
 </body>
 </html>
-"""  # noqa: DTZ005
+"""

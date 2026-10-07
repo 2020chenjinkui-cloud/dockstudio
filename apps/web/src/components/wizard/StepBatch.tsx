@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { cancelBatch, createBatch, subscribeBatch } from '../../api';
-import { PARAM_HELP } from '../../helpText';
+import { useI18n } from '../../i18n';
 import type { BatchSummary, EngineManifest } from '../../types';
 import Tooltip from '../Tooltip';
 import BatchPanel from './BatchPanel';
@@ -23,6 +23,7 @@ export default function StepBatch({
   onOpenJob,
   onTerminal,
 }: StepBatchProps) {
+  const { t } = useI18n();
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [batchName, setBatchName] = useState('');
@@ -90,7 +91,7 @@ export default function StepBatch({
         </dl>
         <div className="control-row">
           <span>批量参数沿用上方参数卡（exhaustiveness {data.params.exhaustiveness} / num_modes {data.params.num_modes} / scoring {data.params.scoring}）</span>
-          <Tooltip text={PARAM_HELP.exhaustiveness} />
+          <Tooltip text={t('help.exhaustiveness')} />
         </div>
         <input
           type="text"

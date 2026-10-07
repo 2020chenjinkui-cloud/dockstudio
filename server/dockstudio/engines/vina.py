@@ -169,6 +169,48 @@ class VinaEngine:
     def _parse_poses(self, out_path: Path, run_log: str) -> list[Pose]:
         return parse_vina_out(out_path)
 
+    def _build_cmd(
+        self,
+        binary: str,
+        box: Box,
+        params: DockParams,
+        receptor_name: str,
+        ligand_name: str,
+        out_name: str,
+    ) -> list[str]:
+        """Build the CLI (subclasses like Uni-Dock override the flag mapping)."""
+        return [
+            binary,
+            "--receptor",
+            receptor_name,
+            "--ligand",
+            ligand_name,
+            "--center_x",
+            str(box.center[0]),
+            "--center_y",
+            str(box.center[1]),
+            "--center_z",
+            str(box.center[2]),
+            "--size_x",
+            str(box.size[0]),
+            "--size_y",
+            str(box.size[1]),
+            "--size_z",
+            str(box.size[2]),
+            "--exhaustiveness",
+            str(params.exhaustiveness),
+            "--num_modes",
+            str(params.num_modes),
+            "--energy_range",
+            str(params.energy_range),
+            "--cpu",
+            str(params.cpu),
+            "--scoring",
+            params.scoring,
+            "--out",
+            out_name,
+        ]
+
     def cancel_current(self) -> None:
         """Best-effort kill of the currently running vina process tree."""
         with self._lock:
@@ -237,37 +279,14 @@ class VinaEngine:
                 shutil.copy2(flex_pdbqt, local_flex)
             flex_name = local_flex.name
 
-        cmd = [
+        cmd = self._build_cmd(
             str(binary),
-            "--receptor",
+            box,
+            params,
             local_receptor.name,
-            "--ligand",
             local_ligand.name,
-            "--center_x",
-            str(box.center[0]),
-            "--center_y",
-            str(box.center[1]),
-            "--center_z",
-            str(box.center[2]),
-            "--size_x",
-            str(box.size[0]),
-            "--size_y",
-            str(box.size[1]),
-            "--size_z",
-            str(box.size[2]),
-            "--exhaustiveness",
-            str(params.exhaustiveness),
-            "--num_modes",
-            str(params.num_modes),
-            "--energy_range",
-            str(params.energy_range),
-            "--cpu",
-            str(params.cpu),
-            "--scoring",
-            params.scoring,
-            "--out",
             out_path.name,
-        ]
+        )
         if params.seed is not None:
             cmd += ["--seed", str(params.seed)]
         if flex_name is not None:

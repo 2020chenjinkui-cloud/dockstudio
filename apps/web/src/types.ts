@@ -161,6 +161,61 @@ export interface PoseAnalysis {
   source: string;
   interactions: Interaction[];
   warnings: string[];
+  pose_check: PoseCheck | null;
+}
+
+// ---- API v0.4 ----
+
+export type Severity = 'info' | 'warning' | 'error';
+
+export interface PoseIssue {
+  rule: string;
+  severity: Severity;
+  message: string;
+}
+
+export interface PoseCheck {
+  pose_index: number;
+  ok: boolean;
+  source: string;
+  issues: PoseIssue[];
+}
+
+export const REPORT_SECTIONS = [
+  'snapshot',
+  'scores',
+  'interactions',
+  'diagram',
+  'viewer3d',
+  'disclaimer',
+] as const;
+
+export type ReportSection = (typeof REPORT_SECTIONS)[number];
+
+export interface ComparisonRow {
+  job_id: string;
+  ligand_id: string;
+  ligand_name: string;
+  smiles: string;
+  engine: string;
+  scoring: string;
+  exhaustiveness: number;
+  top_affinity: number | null;
+  n_poses: number;
+  status: JobStatus;
+}
+
+export interface ComparisonResult {
+  rows: ComparisonRow[];
+}
+
+export interface Stats {
+  projects: number;
+  jobs: number;
+  batches: number;
+  completed_jobs: number;
+  avg_dock_seconds: number | null;
+  by_engine: Record<string, number>;
 }
 
 // ---- API v0.3 ----

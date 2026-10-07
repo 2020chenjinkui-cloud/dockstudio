@@ -1,0 +1,39 @@
+services:
+  app:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    ports:
+      - "8000:8000"
+    volumes:
+      - dockstudio-data:/data
+    environment:
+      DOCKSTUDIO_DATA_DIR: /data
+    restart: unless-stopped
+
+  # GPU worker profile (gnina / Uni-Dock). Requires the NVIDIA Container Toolkit.
+  # Place the gnina/unidock Linux binaries under resources/bin/linux-x86_64/ and run:
+  #   docker compose --profile gpu up
+  gpu-worker:
+    profiles: ["gpu"]
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    ports:
+      - "8001:8000"
+    volumes:
+      - dockstudio-data:/data
+    environment:
+      DOCKSTUDIO_DATA_DIR: /data
+      # DOCKSTUDIO_GNINA: /opt/dockstudio/resources/bin/linux-x86_64/gnina
+      # DOCKSTUDIO_UNIDOCK: /opt/dockstudio/resources/bin/linux-x86_64/unidock
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+volumes:
+  dockstudio-data:

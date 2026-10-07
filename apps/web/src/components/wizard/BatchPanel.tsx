@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { batchResultsCsvUrl, getBatchResults } from '../../api';
-import { statusLabel } from '../../labels';
+import { useI18n } from '../../i18n';
 import type { BatchResults } from '../../types';
 
 const PAGE_SIZE = 20;
@@ -12,6 +12,7 @@ interface BatchPanelProps {
 }
 
 export default function BatchPanel({ batchId, refreshKey = 0, onOpenJob }: BatchPanelProps) {
+  const { t } = useI18n();
   const [results, setResults] = useState<BatchResults | null>(null);
   const [offset, setOffset] = useState(0);
   const [error, setError] = useState<string | null>(null);
@@ -74,7 +75,7 @@ export default function BatchPanel({ batchId, refreshKey = 0, onOpenJob }: Batch
                 <td className="mono">{row.ligand_name || row.ligand_id.slice(0, 8)}</td>
                 <td className="mono wrap smiles-cell">{row.smiles}</td>
                 <td>
-                  <span className={`badge status-${row.status}`}>{statusLabel(row.status)}</span>
+                  <span className={`badge status-${row.status}`}>{t(`status.${row.status}`, row.status)}</span>
                 </td>
                 <td>{row.top_affinity !== null ? row.top_affinity.toFixed(1) : '—'}</td>
                 <td className="error-text cell-error">{row.error ?? ''}</td>

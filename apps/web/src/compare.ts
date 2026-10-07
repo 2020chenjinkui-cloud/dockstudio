@@ -1,0 +1,34 @@
+import type { ComparisonRow } from './types';
+
+export function toggleCompareId(ids: string[], id: string): string[] {
+  return ids.includes(id) ? ids.filter((x) => x !== id) : [...ids, id];
+}
+
+export function bestAffinity(rows: ComparisonRow[]): number | null {
+  const values = rows.map((r) => r.top_affinity).filter((v): v is number => v !== null);
+  if (values.length === 0) return null;
+  return Math.min(...values);
+}
+
+function escCsv(value: string): string {
+  return /[",\n]/.test(value) ? `"${value.replace(/"/g, '""')}"` : value;
+}
+
+export function toCompareCsv(rows: ComparisonRow[]): string {
+  const header =
+    'job_id,ligand_name,smiles,engine,scoring,exhaustiveness,top_affinity,n_poses,status';
+  const lines = rows.map((r) =>
+    [
+      r.job_id,
+      escCsv(r.ligand_name ?? ''),
+      escCsv(r.smiles ?? ''),
+      r.engine,
+      r.scoring,
+      String(r.exhaustiveness),
+      r.top_affinity !== null ? r.top_affinity.toFixed(2) : '',
+      String(r.n_poses),
+      r.status,
+    ].join(','),
+  );
+  return [header, ...lines].join('\n');
+}

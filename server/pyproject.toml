@@ -18,6 +18,9 @@ dependencies = [
     "openbabel-wheel>=3.1.1",
     "python-multipart>=0.0.9",  # FastAPI form/file uploads
     "plip>=3.0",  # protein-ligand interaction profiling (builtin geometric fallback kept)
+    "posebusters>=0.4",  # pose quality checks (builtin geometric fallback kept)
+    "matplotlib>=3.8",  # 2D diagram support
+    "prolif>=2.0",  # interaction fingerprints (optional; unused at runtime)
 ]
 
 [project.optional-dependencies]

@@ -69,7 +69,7 @@ export default function DebugPage() {
   }, [receptor]);
 
   const scoringOptions = useMemo(
-    () => [...new Set(engines.flatMap((e) => e.scoring_functions))],
+    () => [...new Set(engines.filter((e) => e.available).flatMap((e) => e.scoring_functions))],
     [engines],
   );
 

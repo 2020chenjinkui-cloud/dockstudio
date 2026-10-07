@@ -97,3 +97,37 @@ Body = `BatchCreate {name?, engine, receptor_id, ligand_ids[], box, params}` →
 - GET /api/jobs/{jid} 响应 Job 含 batch_id 字段（可空）
 - GET /api/prepare/receptors 返回含 flex 变体（前端应区分显示 parent_id 非空者）
 - CLI：`py -3.12 -m dockstudio.cli serve|engines|demo`（pyproject 增加 script `dockstudio`）
+
+---
+
+# v0.4 增量（M3）
+
+## 姿态质检与 2D 相互作用图
+
+### GET /api/jobs/{jid}/analysis?pose_index=N
+响应 PoseAnalysis 新增 `pose_check: PoseCheck|null.dtype|null`
+（`{pose_index, ok, source:"posebusters"|"builtin", issues:[{rule, severity, message}]}`）。
+
+### GET /api/jobs/{jid}/diagram?pose_index=N
+→ `image/svg+xml`：2D 相互作用示意图（配体 2D + 周围残基标签，按相互作用类型上色）。
+
+## 报告 v2
+
+### GET /api/jobs/{jid}/report?sections=snapshot,scores,interactions,diagram,viewer3d,disclaimer&title=...
+- sections：逗号分隔子集（默认全部）；title：自定义中文标题（<=80 字符，缺省用项目/任务名）。
+
+## 结果对比
+
+### GET /api/compare?job_ids=id1,id2,id3
+→ `ComparisonResult {rows:[ComparisonRow{job_id, ligand_id, ligand_name, smiles, engine, scoring, exhaustiveness, top_affinity, n_poses, status}]}`。
+跨项目可混选；不存在的 id 跳过并在 rows 中不出现（总数 mismatch 即知）。
+
+## 统计
+
+### GET /api/stats
+→ `{projects:int, jobs:int, batches:int, completed_jobs:int, avg_dock_seconds:float|null, by_engine:{vina:int,...}}`。
+
+## 引擎（/api/engines 体现，无需新端点）
+- 新增 gnina 适配器：manifest platforms=["linux"]，requires_gpu=true（CPU 可跑但极慢，unavailable_reason 如实说明，WSL2 用户按指引自查）；scoring_functions=["vina","vinardo","ad4_scoring","dkoes_fast"]，supports_flex_residues。
+- 新增 unidock 适配器：platforms=["linux"]，requires_gpu=true，supports_batch_ligands=true。
+- 二进制解析顺序统一：env(var) → PATH → resources/bin/<platform>/。

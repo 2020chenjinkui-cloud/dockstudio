@@ -3,6 +3,7 @@ import {
   interactionTypeLabel,
   isTerminalStatus,
   parseResidue,
+  poseCheckBadge,
   stageLabel,
   statusLabel,
 } from './labels';
@@ -77,5 +78,39 @@ describe('parseResidue', () => {
     expect(parseResidue('')).toBeNull();
     expect(parseResidue('A25:')).toBeNull();
     expect(parseResidue('ASP25:')).toBeNull();
+  });
+});
+
+describe('poseCheckBadge', () => {
+  it('check 为空返回 none', () => {
+    expect(poseCheckBadge(null)).toBe('none');
+    expect(poseCheckBadge(undefined)).toBe('none');
+  });
+
+  it('ok=true 返回 ok', () => {
+    expect(poseCheckBadge({ ok: true, issues: [] })).toBe('ok');
+  });
+
+  it('按最高 severity 映射', () => {
+    expect(
+      poseCheckBadge({
+        ok: false,
+        issues: [
+          { severity: 'info' },
+          { severity: 'error' },
+          { severity: 'warning' },
+        ],
+      }),
+    ).toBe('error');
+    expect(poseCheckBadge({ ok: false, issues: [{ severity: 'warning' }] })).toBe('warning');
+    expect(poseCheckBadge({ ok: false, issues: [{ severity: 'info' }] })).toBe('info');
+  });
+
+  it('ok=false 且无 issue 时按 info 兜底', () => {
+    expect(poseCheckBadge({ ok: false, issues: [] })).toBe('info');
+  });
+
+  it('未知 severity 视为 info', () => {
+    expect(poseCheckBadge({ ok: false, issues: [{ severity: 'critical' }] })).toBe('info');
   });
 });

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { getBatch, getJob } from '../../api';
+import { useI18n } from '../../i18n';
 import type {
   BatchSummary,
   DockBox,
@@ -50,7 +51,7 @@ const DEFAULT_DATA: WizardData = {
   },
 };
 
-const STEPS = ['受体', '配体', '对接位点', '运行', '结果'];
+const STEP_KEYS = ['step.receptor', 'step.ligand', 'step.site', 'step.run', 'step.results'];
 
 interface WizardProps {
   projectId: string;
@@ -69,6 +70,7 @@ export default function Wizard({
   onResumeHandled,
   onOpenJob,
 }: WizardProps) {
+  const { t } = useI18n();
   const [step, setStep] = useState(1);
   const [data, setData] = useState<WizardData>(DEFAULT_DATA);
   const [job, setJob] = useState<Job | null>(null);
@@ -140,12 +142,12 @@ export default function Wizard({
   return (
     <div className="wizard">
       <ol className="step-bar">
-        {STEPS.map((label, i) => {
+        {STEP_KEYS.map((key, i) => {
           const n = i + 1;
           const reachable = canEnter(n);
-          const text = n === 2 && data.mode === 'batch' ? '配体库' : label;
+          const text = n === 2 && data.mode === 'batch' ? t('step.ligandLibrary') : t(key);
           return (
-            <li key={label}>
+            <li key={key}>
               <button
                 className={`step ${n === step ? 'current' : ''} ${n < step ? 'done' : ''}`}
                 disabled={!reachable}
@@ -162,18 +164,18 @@ export default function Wizard({
             className={data.mode === 'single' ? 'chip active' : 'chip'}
             onClick={() => switchMode('single')}
           >
-            单一对接
+            {t('mode.single')}
           </button>
           <button
             className={data.mode === 'batch' ? 'chip active' : 'chip'}
             onClick={() => switchMode('batch')}
           >
-            批量筛选
+            {t('mode.batch')}
           </button>
         </li>
         <li className="adv-slot">
           <button className={advanced ? 'chip active' : 'chip'} onClick={() => setAdvanced((v) => !v)}>
-            {advanced ? '高级模式：开' : '高级模式'}
+            {advanced ? t('adv.on') : t('adv.toggle')}
           </button>
         </li>
       </ol>
@@ -254,14 +256,14 @@ export default function Wizard({
           ) : null)}
       </section>
       <div className="wizard-nav">
-        {step > 1 && <button onClick={() => setStep(step - 1)}>上一步</button>}
+        {step > 1 && <button onClick={() => setStep(step - 1)}>{t('nav.prev')}</button>}
         {step < 4 && (
           <button
             className="primary"
             disabled={!canEnter(step + 1)}
             onClick={() => setStep(step + 1)}
           >
-            下一步
+            {t('nav.next')}
           </button>
         )}
       </div>
