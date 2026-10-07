@@ -72,6 +72,21 @@ class PreparedReceptor(BaseModel):
     chains: list[str] = Field(default_factory=list)
     cocrystal_ligands: list[CocrystalLigand] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
+    # M2: 柔性变体支持（在受体准备时定义，供 dock 时走 --flex）
+    flex_residues: list[str] = Field(default_factory=list)  # 形如 ["A:42"]
+    flex_pdbqt_path: str | None = None
+    receptor_json_path: str | None = None
+    parent_id: str | None = None  # 柔性变体指向其基础受体 id
+
+
+class PreparedLibrary(BaseModel):
+    """配体库（批量筛选用）：一个已逐条准备的配体清单。"""
+
+    id: str
+    name: str
+    path: str  # 库目录
+    ligand_ids: list[str] = Field(default_factory=list)
+    failed: list[dict] = Field(default_factory=list)  # [{index, smiles|source, reason}]
 
 
 # ---------------------------------------------------------------------------
@@ -118,6 +133,7 @@ class DockJobRequest(BaseModel):
 class Job(BaseModel):
     id: str
     project_id: str
+    batch_id: str | None = None  # M2：批量筛选归属
     status: JobStatus = JobStatus.queued
     progress: JobProgress = Field(default_factory=JobProgress)
     request: DockJobRequest
@@ -152,6 +168,59 @@ class PoseAnalysis(BaseModel):
     source: str = "builtin"  # plip | builtin
     interactions: list[Interaction] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
+# M2: 口袋预测与批量筛选
+
+
+class Pocket(BaseModel):
+    id: int
+    center: tuple[float, float, float]
+    size: tuple[float, float, float]
+    score: float  # 相对体积评分，越大越可能是口袋
+    n_points: int  # 网格点数（体积代理）
+
+
+class PocketResponse(BaseModel):
+    receptor_id: str
+    method: str = "builtin_grid"
+    pockets: list[Pocket] = Field(default_factory=list)
+
+
+class BatchCreate(BaseModel):
+    name: str | None = None
+    engine: str = "vina"
+    receptor_id: str
+    ligand_ids: list[str] = Field(min_length=1)
+    box: Box
+    params: DockParams = Field(default_factory=DockParams)
+
+
+class BatchSummary(BaseModel):
+    id: str
+    project_id: str
+    name: str
+    total: int
+    done: int = 0  # completed
+    failed: int = 0
+    running: int = 0
+    queued: int = 0
+    canceled: int = 0
+    receptor_id: str
+    engine: str = "vina"
+    created_at: datetime
+    is_terminal: bool = False
+
+
+class BatchRow(BaseModel):
+    ligand_id: str
+    ligand_name: str | None = None
+    smiles: str | None = None
+    job_id: str
+    status: JobStatus
+    top_affinity: float | None = None
+    error: str | None = None
 
 
 # ---------------------------------------------------------------------------

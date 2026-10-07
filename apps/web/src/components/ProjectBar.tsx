@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { getProject } from '../api';
 import { statusLabel } from '../labels';
-import type { Project, ProjectDetail } from '../types';
+import type { Project, ProjectDetail, ProjectJobSummary } from '../types';
 import ConfirmDialog from './ConfirmDialog';
 
 interface ProjectBarProps {
@@ -12,6 +12,36 @@ interface ProjectBarProps {
   onCreate: (name: string) => Promise<void>;
   onDelete: () => Promise<void>;
   onOpenJob: (jobId: string) => void;
+  onOpenBatch: (batchId: string) => void;
+}
+
+type DrawerItem =
+  | { kind: 'job'; job: ProjectJobSummary }
+  | { kind: 'batch'; batchId: string; jobs: ProjectJobSummary[] };
+
+function groupJobs(jobs: ProjectJobSummary[]): DrawerItem[] {
+  const items: DrawerItem[] = [];
+  const batches = new Map<string, { index: number; jobs: ProjectJobSummary[] }>();
+  for (const job of jobs) {
+    if (job.batch_id) {
+      const entry = batches.get(job.batch_id);
+      if (entry) {
+        entry.jobs.push(job);
+      } else {
+        batches.set(job.batch_id, { index: items.length, jobs: [job] });
+        items.push({ kind: 'batch', batchId: job.batch_id, jobs: [job] });
+      }
+    } else {
+      items.push({ kind: 'job', job });
+    }
+  }
+  return items;
+}
+
+function batchTopAffinity(jobs: ProjectJobSummary[]): number | null {
+  const values = jobs.map((j) => j.top_affinity).filter((v): v is number => v !== null);
+  if (values.length === 0) return null;
+  return Math.min(...values);
 }
 
 export default function ProjectBar({
@@ -22,6 +52,7 @@ export default function ProjectBar({
   onCreate,
   onDelete,
   onOpenJob,
+  onOpenBatch,
 }: ProjectBarProps) {
   const [creating, setCreating] = useState(false);
   const [newName, setNewName] = useState('');
@@ -57,6 +88,8 @@ export default function ProjectBar({
       setCreateError(e instanceof Error ? e.message : String(e));
     }
   };
+
+  const items = detail ? groupJobs(detail.jobs) : [];
 
   return (
     <header className="project-bar">
@@ -112,29 +145,56 @@ export default function ProjectBar({
               </button>
             </div>
             {!detail && <p className="muted">加载中…</p>}
-            {detail && detail.jobs.length === 0 && <p className="muted">本项目还没有任务。</p>}
+            {detail && items.length === 0 && <p className="muted">本项目还没有任务。</p>}
             {detail && (
               <ul className="job-list">
-                {[...detail.jobs].reverse().map((j) => (
-                  <li key={j.id}>
-                    <button
-                      className="job-item"
-                      onClick={() => {
-                        onOpenJob(j.id);
-                        setDrawerOpen(false);
-                      }}
-                    >
-                      <span className={`badge status-${j.status}`}>{statusLabel(j.status)}</span>
-                      <span className="job-meta">
-                        <span className="mono">{j.id.slice(0, 8)}</span>
-                        <span className="muted">{j.engine}</span>
-                      </span>
-                      <span className="job-affinity">
-                        {j.top_affinity !== null ? `${j.top_affinity.toFixed(1)} kcal/mol` : '—'}
-                      </span>
-                    </button>
-                  </li>
-                ))}
+                {[...items].reverse().map((item) =>
+                  item.kind === 'job' ? (
+                    <li key={item.job.id}>
+                      <button
+                        className="job-item"
+                        onClick={() => {
+                          onOpenJob(item.job.id);
+                          setDrawerOpen(false);
+                        }}
+                      >
+                        <span className={`badge status-${item.job.status}`}>
+                          {statusLabel(item.job.status)}
+                        </span>
+                        <span className="job-meta">
+                          <span className="mono">{item.job.id.slice(0, 8)}</span>
+                          <span className="muted">{item.job.engine}</span>
+                        </span>
+                        <span className="job-affinity">
+                          {item.job.top_affinity !== null
+                            ? `${item.job.top_affinity.toFixed(1)} kcal/mol`
+                            : '—'}
+                        </span>
+                      </button>
+                    </li>
+                  ) : (
+                    <li key={item.batchId}>
+                      <button
+                        className="job-item"
+                        onClick={() => {
+                          onOpenBatch(item.batchId);
+                          setDrawerOpen(false);
+                        }}
+                      >
+                        <span className="badge badge-flex">批量</span>
+                        <span className="job-meta">
+                          <span className="mono">{item.batchId.slice(0, 8)}</span>
+                          <span className="muted">{item.jobs.length} 配体</span>
+                        </span>
+                        <span className="job-affinity">
+                          {batchTopAffinity(item.jobs) !== null
+                            ? `top ${batchTopAffinity(item.jobs)!.toFixed(1)}`
+                            : '—'}
+                        </span>
+                      </button>
+                    </li>
+                  ),
+                )}
               </ul>
             )}
           </aside>

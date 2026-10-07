@@ -7,7 +7,7 @@ import {
   getJob,
   listProjects,
 } from './api';
-import type { DockRequest } from './types';
+import type { BatchCreateRequest, DockRequest } from './types';
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -101,5 +101,80 @@ describe('api client', () => {
     expect(text).toBe('ATOM ...');
     const [url] = spy.mock.calls[0] as [string];
     expect(url).toBe(`/api/file?path=${encodeURIComponent('C:\\data\\a b.pdb')}`);
+  });
+});
+
+describe('api v0.3', () => {
+  it('predictPockets POST receptor_id 与 top_n', async () => {
+    const payload = {
+      receptor_id: 'r1',
+      method: 'builtin_grid',
+      pockets: [
+        { id: 'p1', center: [1, 2, 3], size: [20, 20, 20], score: 12.5, n_points: 42 },
+      ],
+    };
+    const spy = vi.fn().mockResolvedValue(jsonResponse(payload));
+    vi.stubGlobal('fetch', spy);
+    const { predictPockets } = await import('./api');
+    const res = await predictPockets('r1', 5);
+    expect(res.pockets).toHaveLength(1);
+    const [url, init] = spy.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('/api/pockets');
+    expect(JSON.parse(init.body as string)).toEqual({ receptor_id: 'r1', top_n: 5 });
+  });
+
+  it('createFlexReceptor 400 时透出 detail（含可用链）', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(jsonResponse({ detail: '残基不存在，可用链：A / B' }, 400)),
+    );
+    const { createFlexReceptor } = await import('./api');
+    const err = await createFlexReceptor('r1', ['Z:1']).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ApiError);
+    expect((err as ApiError).message).toBe('残基不存在，可用链：A / B');
+    expect((err as ApiError).status).toBe(400);
+  });
+
+  it('getBatchResults 拼接 sort/order/limit/offset 查询串', async () => {
+    const spy = vi.fn().mockResolvedValue(jsonResponse({ total: 0, rows: [] }));
+    vi.stubGlobal('fetch', spy);
+    const { getBatchResults } = await import('./api');
+    await getBatchResults('b1', { sort: 'affinity', order: 'asc', limit: 50, offset: 100 });
+    const [url] = spy.mock.calls[0] as [string];
+    expect(url).toBe('/api/batches/b1/results?sort=affinity&order=asc&limit=50&offset=100');
+  });
+
+  it('getBatchResults 无参数时不带查询串', async () => {
+    const spy = vi.fn().mockResolvedValue(jsonResponse({ total: 0, rows: [] }));
+    vi.stubGlobal('fetch', spy);
+    const { getBatchResults } = await import('./api');
+    await getBatchResults('b1');
+    const [url] = spy.mock.calls[0] as [string];
+    expect(url).toBe('/api/batches/b1/results');
+  });
+
+  it('createBatch POST 到项目路径', async () => {
+    const spy = vi.fn().mockResolvedValue(jsonResponse({ batch_id: 'b1' }));
+    vi.stubGlobal('fetch', spy);
+    const { createBatch } = await import('./api');
+    const body: BatchCreateRequest = {
+      engine: 'vina',
+      receptor_id: 'r1',
+      ligand_ids: ['l1', 'l2'],
+      box: { center: [0, 0, 0], size: [22, 22, 22] },
+      params: {
+        exhaustiveness: 8,
+        num_modes: 9,
+        energy_range: 3,
+        cpu: 1,
+        seed: null,
+        scoring: 'vina',
+      },
+    };
+    const res = await createBatch('p1', body);
+    expect(res.batch_id).toBe('b1');
+    const [url, init] = spy.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('/api/projects/p1/batches');
+    expect(JSON.parse(init.body as string)).toEqual(body);
   });
 });

@@ -1,5 +1,10 @@
 import { isTerminalStatus } from './labels';
 import type {
+  BatchCreateRequest,
+  BatchEvent,
+  BatchResults,
+  BatchSummary,
+  CreateBatchResponse,
   CreateJobResponse,
   DockRequest,
   DockResult,
@@ -8,7 +13,9 @@ import type {
   Job,
   JobEvent,
   JobProgress,
+  PocketResponse,
   PoseAnalysis,
+  PreparedLibrary,
   PreparedLigand,
   PreparedReceptor,
   Project,
@@ -225,6 +232,144 @@ export function subscribeJob(jid: string, handlers: JobSubscription): () => void
         handlers.onJob?.(evt.data as Job);
         if (evt.type === 'finished') stop();
       }
+    };
+    ws.onclose = () => {
+      ws = null;
+      if (!stopped) startPolling();
+    };
+    ws.onerror = () => {
+      ws?.close();
+    };
+  } catch {
+    startPolling();
+  }
+
+  return stop;
+}
+
+// ---- 口袋预测 ----
+
+export async function predictPockets(receptorId: string, topN = 5): Promise<PocketResponse> {
+  return postJson<PocketResponse>('/api/pockets', { receptor_id: receptorId, top_n: topN });
+}
+
+// ---- 柔性残基 ----
+
+export async function createFlexReceptor(
+  rid: string,
+  flexResidues: string[],
+): Promise<PreparedReceptor> {
+  return postJson<PreparedReceptor>(`/api/prepare/receptor/${rid}/flex`, {
+    flex_residues: flexResidues,
+  });
+}
+
+// ---- 配体库 ----
+
+export async function prepareLibrary(file: File, name?: string): Promise<PreparedLibrary> {
+  const form = new FormData();
+  form.append('file', file);
+  if (name) form.append('name', name);
+  return req<PreparedLibrary>('/api/prepare/library', { method: 'POST', body: form });
+}
+
+// ---- 批量筛选 ----
+
+export async function createBatch(
+  pid: string,
+  body: BatchCreateRequest,
+): Promise<CreateBatchResponse> {
+  return postJson<CreateBatchResponse>(`/api/projects/${pid}/batches`, body);
+}
+
+export async function getBatch(bid: string): Promise<BatchSummary> {
+  return req<BatchSummary>(`/api/batches/${bid}`);
+}
+
+export async function cancelBatch(bid: string): Promise<BatchSummary> {
+  return req<BatchSummary>(`/api/batches/${bid}/cancel`, { method: 'POST' });
+}
+
+export interface BatchResultsQuery {
+  sort?: string;
+  order?: 'asc' | 'desc';
+  limit?: number;
+  offset?: number;
+}
+
+export async function getBatchResults(
+  bid: string,
+  query: BatchResultsQuery = {},
+): Promise<BatchResults> {
+  const params = new URLSearchParams();
+  if (query.sort) params.set('sort', query.sort);
+  if (query.order) params.set('order', query.order);
+  if (query.limit !== undefined) params.set('limit', String(query.limit));
+  if (query.offset !== undefined) params.set('offset', String(query.offset));
+  const qs = params.toString();
+  return req<BatchResults>(`/api/batches/${bid}/results${qs ? `?${qs}` : ''}`);
+}
+
+export function batchResultsCsvUrl(bid: string): string {
+  return `/api/batches/${bid}/results.csv`;
+}
+
+export interface BatchSubscription {
+  onSummary?: (summary: BatchSummary) => void;
+  onError?: (message: string) => void;
+}
+
+export function subscribeBatch(bid: string, handlers: BatchSubscription): () => void {
+  let stopped = false;
+  let pollTimer: number | null = null;
+  let ws: WebSocket | null = null;
+
+  const stop = () => {
+    stopped = true;
+    if (pollTimer !== null) {
+      clearTimeout(pollTimer);
+      pollTimer = null;
+    }
+    if (ws) {
+      ws.onclose = null;
+      ws.close();
+      ws = null;
+    }
+  };
+
+  const startPolling = () => {
+    if (stopped || pollTimer !== null) return;
+    const tick = async () => {
+      if (stopped) return;
+      try {
+        const summary = await getBatch(bid);
+        handlers.onSummary?.(summary);
+        if (summary.is_terminal) {
+          stop();
+          return;
+        }
+      } catch (e) {
+        handlers.onError?.(e instanceof Error ? e.message : String(e));
+      }
+      if (!stopped) pollTimer = window.setTimeout(tick, 2000);
+    };
+    pollTimer = window.setTimeout(tick, 2000);
+  };
+
+  try {
+    const proto = window.location.protocol === 'https:' ? 'wss' : 'ws';
+    ws = new WebSocket(`${proto}://${window.location.host}/ws/batches/${bid}`);
+    ws.onmessage = (ev: MessageEvent<string>) => {
+      if (stopped) return;
+      let evt: BatchEvent;
+      try {
+        evt = JSON.parse(ev.data) as BatchEvent;
+      } catch {
+        return;
+      }
+      const summary = evt.data as BatchSummary;
+      handlers.onSummary?.(summary);
+      if (evt.type === 'finished') stop();
     };
     ws.onclose = () => {
       ws = null;

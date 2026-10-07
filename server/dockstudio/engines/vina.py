@@ -162,6 +162,13 @@ class VinaEngine:
             return False, str(exc)
         return True, None
 
+    def _subprocess_env(self) -> dict[str, str] | None:
+        """Extra environment for the engine subprocess (smina needs BABEL_LIBDIR)."""
+        return None
+
+    def _parse_poses(self, out_path: Path, run_log: str) -> list[Pose]:
+        return parse_vina_out(out_path)
+
     def cancel_current(self) -> None:
         """Best-effort kill of the currently running vina process tree."""
         with self._lock:
@@ -276,6 +283,7 @@ class VinaEngine:
                 encoding="utf-8",
                 errors="replace",
                 cwd=work_dir,
+                env=self._subprocess_env(),
                 creationflags=subprocess.CREATE_NEW_PROCESS_GROUP
                 if platform.system() == "Windows"
                 else 0,
@@ -303,7 +311,7 @@ class VinaEngine:
             msg = f"vina produced no output file: {_key_lines(run_log)}"
             raise DockingError(f"{msg}\n{hint}" if hint else msg)
 
-        poses = parse_vina_out(out_path)
+        poses = self._parse_poses(out_path, run_log)
         return DockResult(
             engine=self.manifest.name,
             engine_version=version,

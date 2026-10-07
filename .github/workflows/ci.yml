@@ -4,8 +4,29 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
+  schedule:
+    - cron: "27 3 * * 1"  # weekly Monday 03:27 UTC
 
 jobs:
+  golden:
+    # opt-in: manual trigger or weekly schedule only
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Fetch engine binaries
+        run: bash scripts/fetch_engines.sh
+      - name: Install backend
+        run: pip install -e "server[dev]"
+      - name: Golden redocking regression
+        env:
+          DOCKSTUDIO_GOLDEN: "1"
+        run: pytest server/tests/golden -m golden -q
+
   server-test:
     strategy:
       matrix:

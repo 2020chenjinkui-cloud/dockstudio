@@ -9,7 +9,8 @@ import {
 import { DISCLAIMER } from '../../helpText';
 import { interactionTypeLabel, parseResidue } from '../../labels';
 import MolViewer, { type ResidueHighlight, type ViewerPose } from '../../MolViewer';
-import type { Job, PoseAnalysis } from '../../types';
+import type { Job, PoseAnalysis, PreparedReceptor } from '../../types';
+import CliCard from '../CliCard';
 
 interface StepResultsProps {
   jobId: string;
@@ -20,6 +21,7 @@ interface StepResultsProps {
 export default function StepResults({ jobId, job, onJobUpdate }: StepResultsProps) {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [receptorPdb, setReceptorPdb] = useState<string | null>(null);
+  const [receptor, setReceptor] = useState<PreparedReceptor | null>(null);
   const [poseTexts, setPoseTexts] = useState<Record<number, string>>({});
   const [poseVisible, setPoseVisible] = useState<Record<number, boolean>>({});
   const [selectedPose, setSelectedPose] = useState<number | null>(null);
@@ -74,10 +76,12 @@ export default function StepResults({ jobId, job, onJobUpdate }: StepResultsProp
     if (!job) return;
     let cancelled = false;
     listPreparedReceptors()
-      .then((list) =>
-        list.find((r) => r.id === job.request.receptor_id),
-      )
-      .then((rec) => (rec ? fetchFile(rec.original_path) : null))
+      .then((list) => list.find((r) => r.id === job.request.receptor_id))
+      .then((rec) => {
+        if (cancelled || !rec) return null;
+        setReceptor(rec);
+        return fetchFile(rec.original_path);
+      })
       .then((text) => {
         if (!cancelled && text) setReceptorPdb(text);
       })
@@ -214,6 +218,7 @@ export default function StepResults({ jobId, job, onJobUpdate }: StepResultsProp
             ))}
           </ul>
         )}
+        <CliCard request={job.request} flex={receptor?.parent_id != null} />
         <a className="btn-link" href={reportUrl(jobId)} download>
           下载报告（HTML）
         </a>

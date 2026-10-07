@@ -1,12 +1,14 @@
 import { useEffect, useMemo, useState } from 'react';
 import { dock, fetchFile, getEngines, getHealth } from './api';
 import BoxParamsCard from './components/BoxParamsCard';
+import CliCard from './components/CliCard';
 import LigandCard from './components/LigandCard';
 import ReceptorCard from './components/ReceptorCard';
 import MolViewer, { type ViewerPose } from './MolViewer';
 import type {
   DockBox,
   DockParams,
+  DockRequest,
   DockResult,
   EngineManifest,
   PreparedLigand,
@@ -34,6 +36,7 @@ export default function DebugPage() {
   const [docking, setDocking] = useState(false);
   const [elapsed, setElapsed] = useState<number | null>(null);
   const [result, setResult] = useState<DockResult | null>(null);
+  const [lastRequest, setLastRequest] = useState<DockRequest | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [receptorPdb, setReceptorPdb] = useState<string | null>(null);
   const [poseTexts, setPoseTexts] = useState<Record<number, string>>({});
@@ -92,13 +95,15 @@ export default function DebugPage() {
     const t0 = performance.now();
     try {
       const engine = engines.find((e) => e.available)?.name ?? 'vina';
-      const res = await dock({
+      const request: DockRequest = {
         engine,
         receptor_id: receptor.id,
         ligand_id: ligand.id,
         box,
         params,
-      });
+      };
+      const res = await dock(request);
+      setLastRequest(request);
       setResult(res);
       setElapsed((performance.now() - t0) / 1000);
       const texts: Record<number, string> = {};
@@ -219,6 +224,11 @@ export default function DebugPage() {
               boxSize={box.size}
             />
           </section>
+          {result && lastRequest && (
+            <section className="card">
+              <CliCard request={lastRequest} flex={receptor?.parent_id != null} />
+            </section>
+          )}
           {result && (
             <section className="card">
               <details>

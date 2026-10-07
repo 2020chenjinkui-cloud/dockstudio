@@ -1,0 +1,104 @@
+{
+ "targets": [
+  {
+   "pdb_id": "1HSG",
+   "ccd": "MK1",
+   "smiles": "CC(C)(C)NC(=O)[C@@H]1C[N@@](CC[N@]1C[C@H](C[C@@H](Cc2ccccc2)C(=O)N[C@H]3c4ccccc4C[C@H]3O)O)Cc5cccnc5",
+   "top_affinity": -9.509,
+   "range": [
+    -11.009,
+    -8.009
+   ]
+  },
+  {
+   "pdb_id": "1HVR",
+   "ccd": "XK2",
+   "smiles": "c1ccc(cc1)C[C@@H]2[C@@H]([C@H]([C@H](N(C(=O)N2Cc3ccc4ccccc4c3)Cc5ccc6ccccc6c5)Cc7ccccc7)O)O",
+   "top_affinity": -11.748,
+   "range": [
+    -13.248,
+    -10.248
+   ]
+  },
+  {
+   "pdb_id": "1ETR",
+   "ccd": "MIT",
+   "smiles": "C[C@@H]1CCN([C@H](C1)C(=O)O)C(=O)[C@H](CCCNC(=[NH2+])N)NS(=O)(=O)c2cccc3c2NC[C@@H](C3)C",
+   "top_affinity": -8.856,
+   "range": [
+    -10.356,
+    -7.356
+   ]
+  },
+  {
+   "pdb_id": "2SIM",
+   "ccd": "DAN",
+   "smiles": "CC(=O)N[C@@H]1[C@H](C=C(O[C@H]1[C@@H]([C@@H](CO)O)O)C(=O)O)O",
+   "top_affinity": -6.781,
+   "range": [
+    -8.281,
+    -5.281
+   ]
+  },
+  {
+   "pdb_id": "1PPC",
+   "ccd": "MID",
+   "smiles": "[H]/N=C(/c1ccc(cc1)C[C@H](C(=O)N2CCCCC2)NC(=O)CNS(=O)(=O)c3ccc4ccccc4c3)\\N",
+   "top_affinity": -9.21,
+   "range": [
+    -10.71,
+    -7.71
+   ]
+  },
+  {
+   "pdb_id": "1R1H",
+   "ccd": "BIR",
+   "smiles": "C[C@@H](C(=O)O)NC(=O)[C@H](Cc1ccc(cc1)c2ccccc2)C[P@@](=O)([C@H](C)N)O",
+   "top_affinity": -9.798,
+   "range": [
+    -11.298,
+    -8.298
+   ]
+  },
+  {
+   "pdb_id": "4DFR",
+   "ccd": "MTX",
+   "smiles": "CN(Cc1cnc2c(n1)c(nc(n2)N)N)c3ccc(cc3)C(=O)N[C@@H](CCC(=O)O)C(=O)O",
+   "top_affinity": -7.861,
+   "range": [
+    -9.361,
+    -6.361
+   ]
+  },
+  {
+   "pdb_id": "3CLA",
+   "ccd": "CLM",
+   "smiles": "c1cc(ccc1[C@H]([C@@H](CO)NC(=O)C(Cl)Cl)O)[N+](=O)[O-]",
+   "top_affinity": -5.515,
+   "range": [
+    -7.015,
+    -4.015
+   ]
+  },
+  {
+   "pdb_id": "1AJV",
+   "ccd": "NMB",
+   "smiles": "c1ccc(cc1)C[N@@]2[C@@H]([C@@H]([C@H]([C@H]([N@](S2(=O)=O)Cc3ccccc3)COc4ccccc4)O)O)COc5ccccc5",
+   "top_affinity": -7.256,
+   "range": [
+    -8.756,
+    -5.756
+   ]
+  },
+  {
+   "pdb_id": "4PHV",
+   "ccd": "VAC",
+   "smiles": "c1ccc(cc1)C[C@H](CC(C[C@@H](Cc2ccccc2)C(=O)N[C@H]3c4ccccc4C[C@H]3O)O)C(=O)N[C@H]5c6ccccc6C[C@H]5O",
+   "top_affinity": -12.595,
+   "range": [
+    -14.095,
+    -11.095
+   ]
+  }
+ ]
+}

@@ -74,7 +74,11 @@ export default function StepReceptor({ receptor, onPrepared, onAutoBox }: StepRe
               >
                 <span className="mono">{r.id.slice(0, 8)}</span>
                 <span className="muted">链 {r.chains.join(', ') || '—'}</span>
-                <span className="muted">共晶配体 {r.cocrystal_ligands.length} 个</span>
+                {r.parent_id != null ? (
+                  <span className="badge badge-flex">柔性：{r.flex_residues.join(' ')}</span>
+                ) : (
+                  <span className="muted">共晶配体 {r.cocrystal_ligands.length} 个</span>
+                )}
               </button>
             </li>
           ))}
@@ -88,6 +92,15 @@ export default function StepReceptor({ receptor, onPrepared, onAutoBox }: StepRe
             <dd className="mono">{receptor.id}</dd>
             <dt>链</dt>
             <dd>{receptor.chains.length > 0 ? receptor.chains.join(', ') : '（无）'}</dd>
+            {receptor.parent_id != null && (
+              <>
+                <dt>柔性残基</dt>
+                <dd>
+                  <span className="badge badge-flex">{receptor.flex_residues.join(' ')}</span>
+                  <span className="muted">（基于 {receptor.parent_id.slice(0, 8)}）</span>
+                </dd>
+              </>
+            )}
           </dl>
           {receptor.warnings.length > 0 && (
             <ul className="warnings">

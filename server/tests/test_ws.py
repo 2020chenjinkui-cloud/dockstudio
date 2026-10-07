@@ -2,10 +2,21 @@
 
 from __future__ import annotations
 
+import concurrent.futures
 import time
 from pathlib import Path
 
 import pytest
+
+
+def _recv_json_bounded(ws, timeout: float = 5.0):
+    """receive_json with a hard timeout so event-delivery bugs fail, never hang."""
+    pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+    try:
+        return pool.submit(ws.receive_json).result(timeout=timeout)
+    finally:
+        pool.shutdown(wait=False, cancel_futures=True)
+
 
 import dockstudio.core.queue as queue_mod
 from dockstudio.engines.base import EngineManifest
@@ -84,7 +95,7 @@ def test_ws_receives_events(ws_client) -> None:
     with ws_client.websocket_connect(f"/ws/jobs/{job_id}") as ws:
         deadline = time.time() + 15
         while time.time() < deadline:
-            msg = ws.receive_json()
+            msg = _recv_json_bounded(ws)
             events.append(msg["type"])
             if msg["type"] == "finished":
                 break

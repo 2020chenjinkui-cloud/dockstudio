@@ -68,7 +68,10 @@ class ProjectStore:
         project_dir = self.root / project_id
         (project_dir / "jobs").mkdir(parents=True, exist_ok=True)
         project = Project(
-            id=project_id, name=name, path=str(project_dir), created_at=datetime.now()  # noqa: DTZ005
+            id=project_id,
+            name=name,
+            path=str(project_dir),
+            created_at=datetime.now(),  # noqa: DTZ005
         )
         data = self._load_registry()
         data[project_id] = project.model_dump(mode="json")
@@ -131,11 +134,12 @@ class ProjectStore:
     def job_dir(self, project_id: str, job_id: str) -> Path:
         return self.root / project_id / "jobs" / job_id
 
-    def new_job(self, project_id: str, request: DockJobRequest) -> Job:
+    def new_job(self, project_id: str, request: DockJobRequest, batch_id: str | None = None) -> Job:
         job_id = uuid.uuid4().hex[:8]
         job = Job(
             id=job_id,
             project_id=project_id,
+            batch_id=batch_id,
             request=request,
             created_at=datetime.now(),  # noqa: DTZ005
         )

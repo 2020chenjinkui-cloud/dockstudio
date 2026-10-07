@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import traceback
+from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import Annotated
@@ -30,12 +31,14 @@ from ..analysis.export import export_poses
 from ..analysis.interactions import analyze_job_poses
 from ..analysis.report import generate_report
 from ..config import Settings, get_settings
+from ..core.batch import BatchStore
 from ..core.orchestrator import PrepareRegistry, new_run_dir
 from ..core.project import ProjectStore
 from ..core.queue import EventBus, JobRunner
 from ..engines import available_engines, get_engine
 from ..logging import get_logger, setup_logging
 from ..models import (
+    BatchCreate,
     DockJobRequest,
     DockResult,
     DockStudioError,
@@ -57,6 +60,39 @@ _ALLOWED_ORIGINS = ["http://localhost:5173", "http://127.0.0.1:5173"]
 
 class CreateProjectRequest(BaseModel):
     name: str
+
+
+class PocketsRequest(BaseModel):
+    receptor_id: str
+    top_n: int = 5
+
+
+class FlexRequest(BaseModel):
+    flex_residues: list[str]
+
+
+MAX_UPLOAD_BYTES = 50 * 1024 * 1024  # 50 MB
+
+
+async def _read_upload(file: UploadFile, limit: int = MAX_UPLOAD_BYTES) -> bytes:
+    """Read an uploaded file enforcing the size cap (413 with readable detail)."""
+    chunks: list[bytes] = []
+    total = 0
+    while True:
+        chunk = await file.read(1 << 20)
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > limit:
+            raise PayloadTooLargeError(
+                f"文件超过大小上限 {limit // (1024 * 1024)} MB，请压缩或裁切后重试。"
+            )
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
+class PayloadTooLargeError(Exception):
+    """Uploaded payload exceeded the size cap (maps to 413)."""
 
 
 def _error(status: int, detail: str) -> JSONResponse:
@@ -92,8 +128,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         log.info("marked %d stale jobs interrupted", interrupted)
     bus = EventBus()
     runner = JobRunner(store, registry, bus)
+    batches = BatchStore(settings, store)
 
-    app = FastAPI(title="DockStudio", version=__version__)
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI):
+        runner.start()
+        try:
+            yield
+        finally:
+            await runner.stop()
+
+    app = FastAPI(title="DockStudio", version=__version__, lifespan=lifespan)
     app.state.settings = settings
     app.state.registry = registry
     app.state.store = store
@@ -106,18 +151,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         allow_headers=["*"],
     )
 
-    @app.on_event("startup")
-    async def _startup() -> None:
-        runner.start()
-
-    @app.on_event("shutdown")
-    async def _shutdown() -> None:
-        await runner.stop()
-
     @app.exception_handler(DockStudioError)
     async def dockstudio_error_handler(_request: Request, exc: DockStudioError) -> JSONResponse:
         status = 503 if isinstance(exc, EngineUnavailableError) else 400
         return _error(status, str(exc))
+
+    @app.exception_handler(PayloadTooLargeError)
+    async def payload_too_large_handler(
+        _request: Request, exc: PayloadTooLargeError
+    ) -> JSONResponse:
+        return _error(413, str(exc))
 
     @app.exception_handler(Exception)
     async def unknown_error_handler(_request: Request, exc: Exception) -> JSONResponse:
@@ -148,7 +191,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def prepare_receptor_endpoint(
         file: Annotated[UploadFile, File()],
     ) -> PreparedReceptor:
-        content = await file.read()
+        content = await _read_upload(file)
+        if not content.strip():
+            raise PreparationError("上传文件为空，请选择有效的 PDB 文件。")
         receptor = prepare_receptor(
             content, file.filename or "receptor.pdb", registry.receptors_dir
         )
@@ -167,8 +212,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise PreparationError("provide exactly one of 'file' or 'smiles'")
         if has_file:
             assert file is not None and file.filename is not None
-            content = await file.read()
-            tmp_path = registry.ligands_dir / f"upload_{file.filename}"
+            content = await _read_upload(file)
+            if not content.strip():
+                raise PreparationError("上传文件为空，请选择有效的配体文件。")
+            safe_name = Path(file.filename).name or "ligand.sdf"
+            tmp_path = registry.ligands_dir / f"upload_{safe_name}"
             tmp_path.write_bytes(content)
             try:
                 ligand = prepare_ligand_from_file(tmp_path, registry.ligands_dir)
@@ -198,6 +246,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         ligand = registry.ligands.get(req.ligand_id)
         if ligand is None:
             raise PreparationError(f"unknown ligand_id: {req.ligand_id}")
+        flex_path = Path(receptor.flex_pdbqt_path) if receptor.flex_pdbqt_path else None
+        if flex_path is not None and not engine.manifest.supports_flex_residues:
+            raise PreparationError(
+                f"engine {req.engine} 不支持柔性残基受体变体，请选择支持 flex 的引擎。"
+            )
 
         run_dir = new_run_dir(settings)
         result = engine.dock(
@@ -206,6 +259,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             req.box,
             req.params,
             run_dir,
+            flex_path,
         )
         result.run_dir = str(run_dir)
         pose_paths = export_poses(run_dir / "out.pdbqt", run_dir)
@@ -384,6 +438,162 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             pass
         finally:
             unsubscribe()
+
+    # ------------------------------------------------------------- M2: pockets
+
+    @app.post("/api/pockets")
+    async def pockets_endpoint(body: PocketsRequest):
+        from ..analysis.pockets import pocket_response
+
+        receptor = registry.receptors.get(body.receptor_id)
+        if receptor is None:
+            return _error(400, f"unknown receptor_id: {body.receptor_id}")
+        rec_dir = Path(receptor.pdbqt_path).parent
+        protein = rec_dir / "receptor_protein.pdb"
+        if not protein.is_file():
+            protein = rec_dir / "receptor_clean.pdb"
+        return pocket_response(body.receptor_id, protein, rec_dir, top_n=body.top_n)
+
+    # ------------------------------------------------------------- M2: flex
+
+    @app.post("/api/prepare/receptor/{rid}/flex", status_code=201)
+    async def flex_variant_endpoint(rid: str, body: FlexRequest):
+        from ..prep.receptor import prepare_flex_variant
+
+        base = registry.receptors.get(rid)
+        if base is None:
+            return _not_found("receptor")
+        if base.parent_id:  # flex variants nest off the rigid base only
+            base = registry.receptors.get(base.parent_id, base)
+        variant = prepare_flex_variant(base, body.flex_residues, registry.receptors_dir)
+        registry.add_receptor(variant)
+        return variant
+
+    # ------------------------------------------------------------- M2: library
+
+    @app.post("/api/prepare/library", status_code=201)
+    async def library_endpoint(
+        file: Annotated[UploadFile, File()],
+        name: Annotated[str | None, Form()] = None,
+    ):
+        from ..prep.library import prepare_library
+
+        content = await _read_upload(file)
+        if not content.strip():
+            raise PreparationError("库文件为空。")
+        return prepare_library(content, file.filename or "library.smi", registry, name)
+
+    # ------------------------------------------------------------- M2: batches
+
+    @app.post("/api/projects/{pid}/batches", status_code=201)
+    async def submit_batch(pid: str, body: BatchCreate):
+        from ..core.batch import job_request_from_batch
+
+        if store.get(pid) is None:
+            return _not_found("project")
+        for ligand_id in body.ligand_ids:
+            if ligand_id not in registry.ligands:
+                return _error(400, f"unknown ligand_id: {ligand_id}")
+        if body.receptor_id not in registry.receptors:
+            return _error(400, f"unknown receptor_id: {body.receptor_id}")
+        summary = batches.create(pid, body)
+        for ligand_id in body.ligand_ids:
+            job = store.new_job(pid, job_request_from_batch(body, ligand_id), batch_id=summary.id)
+            runner.submit(job)
+        return {"batch_id": summary.id}
+
+    def _batch_summary_or_404(bid: str):
+        jobs_mem = {jid: runner._jobs[jid] for jid in runner._jobs}
+        summary = batches.summary(bid, runner_jobs=jobs_mem)
+        if summary is None:
+            return None
+        return summary
+
+    @app.get("/api/batches/{bid}")
+    async def get_batch(bid: str):
+        summary = _batch_summary_or_404(bid)
+        if summary is None:
+            return _not_found("batch")
+        return summary
+
+    @app.post("/api/batches/{bid}/cancel")
+    async def cancel_batch(bid: str):
+        if batches.get_meta(bid) is None:
+            return _not_found("batch")
+        for job in batches.jobs_of(bid):
+            if not job.is_terminal:
+                runner.cancel(job.id)
+        return _batch_summary_or_404(bid)
+
+    @app.get("/api/batches/{bid}/results")
+    async def batch_results(
+        bid: str,
+        sort: str = Query(default="affinity", pattern="^(affinity|name)$"),
+        order: str = Query(default="asc", pattern="^(asc|desc)$"),
+        limit: int = Query(default=50, ge=1, le=10000),
+        offset: int = Query(default=0, ge=0),
+    ):
+        result = batches.results(bid, registry, sort=sort, order=order, limit=limit, offset=offset)
+        if result is None:
+            return _not_found("batch")
+        return {
+            "total": result["total"],
+            "rows": [r.model_dump(mode="json") for r in result["rows"]],
+        }
+
+    @app.get("/api/batches/{bid}/results.csv", response_class=PlainTextResponse)
+    async def batch_results_csv(bid: str) -> Response:
+        csv_text = batches.results_csv(bid, registry)
+        if csv_text is None:
+            return _not_found("batch")
+        return PlainTextResponse(
+            csv_text,
+            media_type="text/csv",
+            headers={"Content-Disposition": f'attachment; filename="batch-{bid}-results.csv"'},
+        )
+
+    @app.websocket("/ws/batches/{bid}")
+    async def batch_ws(websocket: WebSocket, bid: str) -> None:
+        await websocket.accept()
+        queue: asyncio.Queue[tuple[str, object]] = asyncio.Queue()
+        loop = asyncio.get_running_loop()
+
+        def listener(_job_id: str, _event: tuple[str, object]) -> None:
+            def enqueue() -> None:
+                summary = batches.summary(bid)
+                if summary is not None:
+                    kind = "finished" if summary.is_terminal else "batch_progress"
+                    queue.put_nowait((kind, summary))
+
+            loop.call_soon_threadsafe(enqueue)
+
+        # subscribe to every job of the batch (discovery is lazy: jobs may be
+        # added between page load and ws connect, so also send one snapshot now)
+        unsubscribers = []
+        try:
+            for job in batches.jobs_of(bid):
+                unsubscribers.append(bus.subscribe(job.id, listener))
+            summary = batches.summary(bid)
+            if summary is not None:
+                await websocket.send_text(
+                    json.dumps(
+                        {"type": "batch_progress", "data": summary.model_dump(mode="json")},
+                        ensure_ascii=False,
+                    )
+                )
+            while True:
+                kind, payload = await queue.get()
+                data = (
+                    payload.model_dump(mode="json") if isinstance(payload, BaseModel) else payload
+                )
+                await websocket.send_text(
+                    json.dumps({"type": kind, "data": data}, ensure_ascii=False)
+                )
+        except WebSocketDisconnect:
+            pass
+        finally:
+            for unsub in unsubscribers:
+                unsub()
 
     return app
 

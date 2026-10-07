@@ -25,6 +25,10 @@ export interface PreparedReceptor {
   chains: string[];
   cocrystal_ligands: CocrystalLigand[];
   warnings: string[];
+  parent_id: string | null;
+  flex_residues: string[];
+  flex_pdbqt_path: string | null;
+  receptor_json_path: string | null;
 }
 
 export interface PreparedLigand {
@@ -106,6 +110,7 @@ export interface ProjectJobSummary {
   top_affinity: number | null;
   created_at: string;
   finished_at: string | null;
+  batch_id?: string | null;
 }
 
 export interface ProjectDetail extends Project {
@@ -121,6 +126,7 @@ export interface JobProgress {
 export interface Job {
   id: string;
   project_id: string;
+  batch_id: string | null;
   status: JobStatus;
   progress: JobProgress;
   request: DockRequest;
@@ -155,4 +161,91 @@ export interface PoseAnalysis {
   source: string;
   interactions: Interaction[];
   warnings: string[];
+}
+
+// ---- API v0.3 ----
+
+export interface Pocket {
+  id: string;
+  center: [number, number, number];
+  size: [number, number, number];
+  score: number;
+  n_points: number;
+}
+
+export interface PocketResponse {
+  receptor_id: string;
+  method: string;
+  pockets: Pocket[];
+}
+
+export interface FlexReceptorRequest {
+  flex_residues: string[];
+}
+
+export interface LibraryFailure {
+  index: number;
+  smiles: string;
+  reason: string;
+}
+
+export interface PreparedLibrary {
+  id: string;
+  name: string;
+  path: string;
+  ligand_ids: string[];
+  failed: LibraryFailure[];
+}
+
+export interface BatchCreateRequest {
+  name?: string;
+  engine: string;
+  receptor_id: string;
+  ligand_ids: string[];
+  box: DockBox;
+  params: DockParams;
+}
+
+export interface CreateBatchResponse {
+  batch_id: string;
+}
+
+export interface BatchSummary {
+  id: string;
+  project_id: string;
+  name: string;
+  total: number;
+  done: number;
+  failed: number;
+  running: number;
+  queued: number;
+  canceled: number;
+  receptor_id: string;
+  engine: string;
+  created_at: string;
+  is_terminal: boolean;
+}
+
+export type BatchRowStatus = JobStatus;
+
+export interface BatchRow {
+  ligand_id: string;
+  ligand_name: string;
+  smiles: string;
+  job_id: string;
+  status: BatchRowStatus;
+  top_affinity: number | null;
+  error: string | null;
+}
+
+export interface BatchResults {
+  total: number;
+  rows: BatchRow[];
+}
+
+export type BatchEventType = 'batch_progress' | 'finished';
+
+export interface BatchEvent {
+  type: BatchEventType;
+  data: unknown;
 }

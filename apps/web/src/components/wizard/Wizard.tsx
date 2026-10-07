@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
-import { getJob } from '../../api';
-import { HINT_ADVANCED_MODE } from '../../helpText';
+import { getBatch, getJob } from '../../api';
 import type {
+  BatchSummary,
   DockBox,
   DockParams,
   EngineManifest,
@@ -9,24 +9,36 @@ import type {
   PreparedLigand,
   PreparedReceptor,
 } from '../../types';
+import BatchPanel from './BatchPanel';
+import StepBatch from './StepBatch';
 import StepLigand from './StepLigand';
 import StepReceptor from './StepReceptor';
 import StepResults from './StepResults';
 import StepRun from './StepRun';
 import StepSite from './StepSite';
 
+export type WizardMode = 'single' | 'batch';
+
 export interface WizardData {
+  mode: WizardMode;
   receptor: PreparedReceptor | null;
   ligand: PreparedLigand | null;
+  batchLigandIds: string[];
   box: DockBox;
   params: DockParams;
+  flexText: string;
   jobId: string | null;
+  batchId: string | null;
 }
 
 const DEFAULT_DATA: WizardData = {
+  mode: 'single',
   receptor: null,
   ligand: null,
+  batchLigandIds: [],
   jobId: null,
+  batchId: null,
+  flexText: '',
   box: { center: [0, 0, 0], size: [25, 25, 25] },
   params: {
     exhaustiveness: 8,
@@ -44,13 +56,24 @@ interface WizardProps {
   projectId: string;
   engines: EngineManifest[];
   resumeJobId: string | null;
+  resumeBatchId: string | null;
   onResumeHandled: () => void;
+  onOpenJob: (jobId: string) => void;
 }
 
-export default function Wizard({ projectId, engines, resumeJobId, onResumeHandled }: WizardProps) {
+export default function Wizard({
+  projectId,
+  engines,
+  resumeJobId,
+  resumeBatchId,
+  onResumeHandled,
+  onOpenJob,
+}: WizardProps) {
   const [step, setStep] = useState(1);
   const [data, setData] = useState<WizardData>(DEFAULT_DATA);
   const [job, setJob] = useState<Job | null>(null);
+  const [batchSummary, setBatchSummary] = useState<BatchSummary | null>(null);
+  const [advanced, setAdvanced] = useState(false);
   const [resumeError, setResumeError] = useState<string | null>(null);
 
   const patch = useCallback((p: Partial<WizardData>) => {
@@ -65,12 +88,25 @@ export default function Wizard({ projectId, engines, resumeJobId, onResumeHandle
     getJob(resumeJobId)
       .then((j) => {
         setJob(j);
-        setData((d) => ({ ...d, jobId: j.id }));
+        setData((d) => ({ ...d, mode: 'single', jobId: j.id }));
         setStep(j.status === 'completed' ? 5 : 4);
       })
       .catch((e: unknown) => setResumeError(e instanceof Error ? e.message : String(e)))
       .finally(onResumeHandled);
   }, [resumeJobId, onResumeHandled]);
+
+  useEffect(() => {
+    if (!resumeBatchId) return;
+    setResumeError(null);
+    getBatch(resumeBatchId)
+      .then((s) => {
+        setBatchSummary(s);
+        setData((d) => ({ ...d, mode: 'batch', batchId: s.id }));
+        setStep(s.is_terminal ? 5 : 4);
+      })
+      .catch((e: unknown) => setResumeError(e instanceof Error ? e.message : String(e)))
+      .finally(onResumeHandled);
+  }, [resumeBatchId, onResumeHandled]);
 
   const canEnter = (target: number): boolean => {
     if (target <= step) return true;
@@ -78,14 +114,27 @@ export default function Wizard({ projectId, engines, resumeJobId, onResumeHandle
       case 2:
         return data.receptor !== null;
       case 3:
-        return data.ligand !== null;
+        return data.mode === 'single' ? data.ligand !== null : data.batchLigandIds.length > 0;
       case 4:
-        return data.receptor !== null && data.ligand !== null;
+        return (
+          data.receptor !== null &&
+          (data.mode === 'single' ? data.ligand !== null : data.batchLigandIds.length > 0)
+        );
       case 5:
-        return job?.status === 'completed';
+        return data.mode === 'single'
+          ? job?.status === 'completed'
+          : batchSummary?.is_terminal === true;
       default:
         return false;
     }
+  };
+
+  const switchMode = (mode: WizardMode) => {
+    if (mode === data.mode) return;
+    setData((d) => ({ ...d, mode, jobId: null, batchId: null }));
+    setJob(null);
+    setBatchSummary(null);
+    setStep((s) => (s > 3 ? 2 : s));
   };
 
   return (
@@ -94,6 +143,7 @@ export default function Wizard({ projectId, engines, resumeJobId, onResumeHandle
         {STEPS.map((label, i) => {
           const n = i + 1;
           const reachable = canEnter(n);
+          const text = n === 2 && data.mode === 'batch' ? '配体库' : label;
           return (
             <li key={label}>
               <button
@@ -102,15 +152,29 @@ export default function Wizard({ projectId, engines, resumeJobId, onResumeHandle
                 onClick={() => setStep(n)}
               >
                 <span className="step-num">{n}</span>
-                {label}
+                {text}
               </button>
             </li>
           );
         })}
+        <li className="mode-slot">
+          <button
+            className={data.mode === 'single' ? 'chip active' : 'chip'}
+            onClick={() => switchMode('single')}
+          >
+            单一对接
+          </button>
+          <button
+            className={data.mode === 'batch' ? 'chip active' : 'chip'}
+            onClick={() => switchMode('batch')}
+          >
+            批量筛选
+          </button>
+        </li>
         <li className="adv-slot">
-          <span className="adv-link" title={HINT_ADVANCED_MODE}>
-            高级模式
-          </span>
+          <button className={advanced ? 'chip active' : 'chip'} onClick={() => setAdvanced((v) => !v)}>
+            {advanced ? '高级模式：开' : '高级模式'}
+          </button>
         </li>
       </ol>
       {resumeError && <div className="banner">任务加载失败：{resumeError}</div>}
@@ -127,37 +191,76 @@ export default function Wizard({ projectId, engines, resumeJobId, onResumeHandle
         )}
         {step === 2 && (
           <StepLigand
+            mode={data.mode}
             ligand={data.ligand}
             onPrepared={(ligand) => {
               patch({ ligand });
               setStep(3);
             }}
+            batchLigandIds={data.batchLigandIds}
+            onBatchChange={(batchLigandIds) => patch({ batchLigandIds })}
           />
         )}
         {step === 3 && data.receptor && (
           <StepSite receptor={data.receptor} box={data.box} onBoxChange={(box) => patch({ box })} />
         )}
-        {step === 4 && (
-          <StepRun
-            projectId={projectId}
-            data={data}
-            engines={engines}
-            onParamsChange={(params) => patch({ params })}
-            onJobId={(jobId) => patch({ jobId })}
-            onJobUpdate={onJobUpdate}
-            onCompleted={() => setStep(5)}
-          />
-        )}
-        {step === 5 && data.jobId && (
-          <StepResults jobId={data.jobId} job={job} onJobUpdate={onJobUpdate} />
-        )}
+        {step === 4 &&
+          (data.mode === 'single' ? (
+            <StepRun
+              projectId={projectId}
+              data={data}
+              advanced={advanced}
+              engines={engines}
+              onParamsChange={(params) => patch({ params })}
+              onFlexText={(flexText) => patch({ flexText })}
+              onJobId={(jobId) => patch({ jobId })}
+              onJobUpdate={onJobUpdate}
+              onCompleted={() => setStep(5)}
+            />
+          ) : (
+            <StepBatch
+              projectId={projectId}
+              data={data}
+              engines={engines}
+              onBatchId={(batchId) => patch({ batchId })}
+              onOpenJob={onOpenJob}
+              onTerminal={(s) => {
+                setBatchSummary(s);
+                setStep(5);
+              }}
+            />
+          ))}
+        {step === 5 &&
+          (data.mode === 'single' ? (
+            data.jobId && <StepResults jobId={data.jobId} job={job} onJobUpdate={onJobUpdate} />
+          ) : data.batchId ? (
+            <div className="step-body">
+              <div className="progress-head">
+                <span
+                  className={
+                    batchSummary?.is_terminal ? 'badge status-completed' : 'badge status-running'
+                  }
+                >
+                  {batchSummary?.is_terminal ? '已完成' : '进行中'}
+                </span>
+                {batchSummary && (
+                  <span>
+                    完成 {batchSummary.done}/{batchSummary.total}，失败 {batchSummary.failed}
+                  </span>
+                )}
+              </div>
+              <BatchPanel batchId={data.batchId} onOpenJob={onOpenJob} />
+            </div>
+          ) : null)}
       </section>
       <div className="wizard-nav">
-        {step > 1 && (
-          <button onClick={() => setStep(step - 1)}>上一步</button>
-        )}
+        {step > 1 && <button onClick={() => setStep(step - 1)}>上一步</button>}
         {step < 4 && (
-          <button className="primary" disabled={!canEnter(step + 1)} onClick={() => setStep(step + 1)}>
+          <button
+            className="primary"
+            disabled={!canEnter(step + 1)}
+            onClick={() => setStep(step + 1)}
+          >
             下一步
           </button>
         )}

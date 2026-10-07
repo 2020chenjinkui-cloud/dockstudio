@@ -847,3 +847,216 @@ button.danger-outline {
     width: min(380px, 90vw);
   }
 }
+
+/* ---- M2 / v0.3 ---- */
+
+.chip {
+  border-radius: 14px;
+  padding: 4px 14px;
+  font-size: 13px;
+}
+
+.chip.active {
+  background: #2f6fed;
+  border-color: #2f6fed;
+  color: #fff;
+}
+
+.mode-slot {
+  margin-left: auto;
+  display: flex;
+  gap: 6px;
+}
+
+.adv-slot {
+  margin-left: 8px;
+}
+
+.step-bar .adv-slot,
+.step-bar .mode-slot {
+  align-self: center;
+}
+
+/* 口袋列表 */
+
+.pocket-list {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.pocket-item {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: #12161d;
+  text-align: left;
+  font-size: 13px;
+}
+
+.pocket-item.selected {
+  border-color: #2f6fed;
+  background: #1c2740;
+}
+
+.pocket-id {
+  min-width: 56px;
+}
+
+.pocket-bar {
+  flex: 0 0 120px;
+  height: 8px;
+  background: #0d1117;
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.pocket-bar-fill {
+  display: block;
+  height: 100%;
+  background: #58c472;
+}
+
+/* 柔性残基 */
+
+.flex-card {
+  border: 1px solid #2a3342;
+  border-radius: 8px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.badge-flex {
+  color: #c39ef0;
+  border-color: #5b4580;
+}
+
+.error-list {
+  margin: 0;
+  padding-left: 18px;
+  color: #f08a97;
+  font-size: 13px;
+}
+
+.ok-text {
+  color: #58c472;
+  margin: 0;
+}
+
+/* 批量分段进度条 */
+
+.seg-bar {
+  display: flex;
+  height: 10px;
+  border-radius: 5px;
+  overflow: hidden;
+  background: #12161d;
+}
+
+.seg {
+  display: block;
+  height: 100%;
+  transition: width 0.3s ease;
+}
+
+.seg-done {
+  background: #58c472;
+}
+
+.seg-running {
+  background: #2f6fed;
+}
+
+.seg-failed {
+  background: #d15b5b;
+}
+
+.seg-canceled {
+  background: #e0c07f;
+}
+
+.seg-queued {
+  background: #3b4757;
+}
+
+/* 排行榜 */
+
+.batch-panel {
+  border-top: 1px solid #2a3342;
+  padding-top: 10px;
+}
+
+.batch-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+}
+
+.batch-toolbar-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.btn-link.small {
+  margin-top: 0;
+  padding: 6px 12px;
+  font-size: 13px;
+}
+
+.smiles-cell {
+  max-width: 260px;
+}
+
+.cell-error {
+  max-width: 180px;
+  font-size: 12px;
+}
+
+.pagination {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 10px;
+}
+
+.check-item {
+  cursor: pointer;
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  padding: 6px 14px;
+  border: 1px solid #3b4757;
+  border-radius: 6px;
+  background: #12161d;
+}
+
+/* 等效命令行 */
+
+.cli-card {
+  margin-top: 14px;
+}
+
+.cli-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.cli {
+  background: #12161d;
+  border: 1px solid #2a3342;
+  border-radius: 6px;
+  padding: 10px 12px;
+  font-size: 12.5px;
+  white-space: pre-wrap;
+  word-break: break-all;
+  margin: 6px 0 0;
+}

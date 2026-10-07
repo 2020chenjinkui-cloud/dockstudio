@@ -10,9 +10,10 @@ __all__ = ["available_engines", "get_engine"]
 def available_engines() -> list[DockEngine]:
     """Instantiate all built-in engine adapters. Unavailable engines are still
     returned (manifest says why) so the UI can grey them out."""
+    from .smina import SminaEngine
     from .vina import VinaEngine
 
-    return [VinaEngine()]
+    return [VinaEngine(), SminaEngine()]
 
 
 def get_engine(name: str) -> DockEngine | None:

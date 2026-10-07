@@ -48,3 +48,23 @@ def hsg_pdb_bytes() -> bytes:
 
 
 os.environ.setdefault("PYTHONIOENCODING", "utf-8")
+
+
+def pytest_configure(config: pytest.Config) -> None:
+    config.addinivalue_line(
+        "markers",
+        "golden: long redocking regression set (opt-in, slow, needs network-free fixtures)",
+    )
+
+
+def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
+    """Golden tests run only with `-m golden` or DOCKSTUDIO_GOLDEN=1."""
+    golden_selected = (
+        config.getoption("-m", default="") == "golden" or os.environ.get("DOCKSTUDIO_GOLDEN") == "1"
+    )
+    if golden_selected:
+        return
+    skip = pytest.mark.skip(reason="golden set is opt-in (-m golden or DOCKSTUDIO_GOLDEN=1)")
+    for item in items:
+        if "golden" in item.keywords:
+            item.add_marker(skip)

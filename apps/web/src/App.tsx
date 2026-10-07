@@ -27,6 +27,7 @@ function WizardPage() {
   const [engines, setEngines] = useState<EngineManifest[]>([]);
   const [backendOk, setBackendOk] = useState(false);
   const [resumeJobId, setResumeJobId] = useState<string | null>(null);
+  const [resumeBatchId, setResumeBatchId] = useState<string | null>(null);
   const [newName, setNewName] = useState('');
   const [createError, setCreateError] = useState<string | null>(null);
   const [showOnboarding, setShowOnboarding] = useState(
@@ -65,6 +66,7 @@ function WizardPage() {
     if (!currentId) return;
     await deleteProject(currentId);
     setResumeJobId(null);
+    setResumeBatchId(null);
     await refreshProjects();
   }, [currentId, refreshProjects]);
 
@@ -95,10 +97,18 @@ function WizardPage() {
         onSelect={(id) => {
           setCurrentId(id);
           setResumeJobId(null);
+          setResumeBatchId(null);
         }}
         onCreate={handleCreate}
         onDelete={handleDelete}
-        onOpenJob={(jobId) => setResumeJobId(jobId)}
+        onOpenJob={(jobId) => {
+          setResumeBatchId(null);
+          setResumeJobId(jobId);
+        }}
+        onOpenBatch={(batchId) => {
+          setResumeJobId(null);
+          setResumeBatchId(batchId);
+        }}
       />
       <main className="main-area">
         {projects === null ? (
@@ -131,7 +141,15 @@ function WizardPage() {
             projectId={current.id}
             engines={engines}
             resumeJobId={resumeJobId}
-            onResumeHandled={() => setResumeJobId(null)}
+            resumeBatchId={resumeBatchId}
+            onResumeHandled={() => {
+              setResumeJobId(null);
+              setResumeBatchId(null);
+            }}
+            onOpenJob={(jobId) => {
+              setResumeBatchId(null);
+              setResumeJobId(jobId);
+            }}
           />
         )}
       </main>

@@ -56,3 +56,44 @@ queued → 直接取消；running → 调引擎 cancel_current() 尽力杀进程
 - POST /api/prepare/ligand（multipart file 或 smiles/name）→ PreparedLigand
 - POST /api/dock（同步，DockJobRequest 同构）→ DockResult（M0 调试页继续用；不入队）
 - GET /api/file?path=（data_dir 沙箱）
+
+---
+
+# v0.3 增量（M2 + M1 收尾）
+
+## 口袋预测
+
+### POST /api/pockets
+Body `{receptor_id, top_n?: 5}` → `PocketResponse {receptor_id, method:"builtin_grid", pockets:[{id, center, size, score, n_points}]}`。
+内置几何算法（网格埋藏腔检测），几秒级；结果可缓存（receptor_id+参数）。失败 400。
+
+## 柔性残基
+
+### POST /api/prepare/receptor/{rid}/flex
+Body `{flex_residues: ["A:42", ...]}`（`链:残基号`，<=10 个）→ 新的 `PreparedReceptor` 变体
+（parent_id=rid，flex_residues、flex_pdbqt_path、receptor_json_path 非空）。残基不存在 → 400 并列出可用链。
+柔性变体参与对接时，引擎须带 `--flex`；不支持 flex 的引擎用柔性变体会 400。
+
+## 配体库
+
+### POST /api/prepare/library
+multipart `file`（.sdf 多分子 / .smi / .csv 含 smiles 列），可选 `name` → `PreparedLibrary {id, name, path, ligand_ids[], failed:[{index,smiles,reason}]}`。
+流式解析，单条失败不中断；上限 50000 条。`.smi` 每行 `SMILES [名称]`。
+
+## 批量筛选
+
+### POST /api/projects/{pid}/batches
+Body = `BatchCreate {name?, engine, receptor_id, ligand_ids[], box, params}` → `{batch_id}`。
+为每个配体建 Job（batch_id 标记）并入同一串行队列。
+### GET /api/batches/{bid} → `BatchSummary`（由 jobs 聚合：done/failed/running/queued/canceled、is_terminal）
+### POST /api/batches/{bid}/cancel → 取消该批全部非终态 job（queued 直接终态，running 尽力杀）
+### GET /api/batches/{bid}/results?sort=affinity&order=asc&limit=50&offset=0
+→ `{total, rows:[BatchRow{ligand_id, ligand_name, smiles, job_id, status, top_affinity, error}]}`
+### GET /api/batches/{bid}/results.csv → text/csv（列：rank, ligand_name, smiles, top_affinity, status, job_id, error）
+### WS /ws/batches/{bid} → `{"type":"batch_progress","data":BatchSummary}`，终态发 `{"type":"finished","data":BatchSummary}`
+
+## 其他
+
+- GET /api/jobs/{jid} 响应 Job 含 batch_id 字段（可空）
+- GET /api/prepare/receptors 返回含 flex 变体（前端应区分显示 parent_id 非空者）
+- CLI：`py -3.12 -m dockstudio.cli serve|engines|demo`（pyproject 增加 script `dockstudio`）

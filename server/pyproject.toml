@@ -32,6 +32,7 @@ dev = [
 
 [project.scripts]
 dockstudio-server = "dockstudio.api.app:main"
+dockstudio = "dockstudio.cli:main"
 
 [tool.setuptools.packages.find]
 include = ["dockstudio*"]

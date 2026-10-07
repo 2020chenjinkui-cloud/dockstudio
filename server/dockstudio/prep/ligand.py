@@ -64,24 +64,33 @@ def prepare_ligand_from_smiles(smiles: str, name: str | None, out_dir: Path) -> 
     """Build a ligand PDBQT from a SMILES string."""
     smiles = (smiles or "").strip()
     if not smiles:
-        raise PreparationError("SMILES string is empty")
+        raise PreparationError("SMILES 字符串为空，请粘贴有效的 SMILES。")
+    if "." in smiles:
+        raise PreparationError("SMILES 含有多组分（'.' 分隔），请先拆分，每次只提交单个组分。")
+    if any(ch.isspace() for ch in smiles):
+        smiles = smiles.split()[0]
+        log.info("SMILES contained whitespace; truncated to %r", smiles)
+    bad = [c for c in smiles if ord(c) > 127]
+    if bad:
+        raise PreparationError(f"SMILES 含非法字符 {bad[0]!r}（只接受 ASCII），请检查输入法。")
     mol = Chem.MolFromSmiles(smiles)
     if mol is None:
-        raise PreparationError(f"RDKit could not parse SMILES: {smiles!r}")
+        raise PreparationError(f"RDKit 无法解析 SMILES：{smiles[:60]!r}")
     mol = _embed_3d(mol)
     return _write_ligand(mol, "smiles", name, out_dir)
 
 
 def prepare_ligand_from_file(path: Path, out_dir: Path) -> PreparedLigand:
-    """Build a ligand PDBQT from an .sdf/.mol/.mol2 file."""
+    """Build a ligand PDBQT from an .sdf/.mol/.mol2 file.
+
+    Parsing goes through in-memory mol blocks so unicode/non-ASCII paths work
+    (RDKit's file-based suppliers fail on such paths on Windows)."""
     suffix = path.suffix.lower()
+    text = path.read_text(encoding="utf-8", errors="replace")
     mol: Chem.Mol | None = None
     if suffix == ".sdf":
-        supplier = Chem.SDMolSupplier(str(path), removeHs=False, sanitize=False)
-        for entry in supplier:
-            if entry is not None:
-                mol = entry
-                break
+        block = text.split("$$$$")[0]
+        mol = Chem.MolFromMolBlock(block, sanitize=False, removeHs=False)
         if mol is not None:
             try:
                 mol.UpdatePropertyCache()
@@ -90,9 +99,9 @@ def prepare_ligand_from_file(path: Path, out_dir: Path) -> PreparedLigand:
             except Exception as exc:
                 raise PreparationError(f"RDKit could not sanitize {path.name}: {exc}") from exc
     elif suffix == ".mol":
-        mol = Chem.MolFromMolFile(str(path), removeHs=False, sanitize=True)
+        mol = Chem.MolFromMolBlock(text, sanitize=True, removeHs=False)
     elif suffix == ".mol2":
-        mol = Chem.MolFromMol2File(str(path), removeHs=False, sanitize=True)
+        mol = Chem.MolFromMol2Block(text, sanitize=True, removeHs=False)
     else:
         raise PreparationError(
             f"unsupported ligand file type: {suffix or '<none>'} (use .sdf/.mol/.mol2)"

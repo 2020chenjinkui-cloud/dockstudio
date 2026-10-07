@@ -173,6 +173,16 @@ class JobRunner:
             )
 
         run_dir = self.store.job_dir(job.project_id, job.id)
+        # getattr: legacy registries/mocks may lack the M2 flex fields
+        flex_pdbqt = getattr(receptor, "flex_pdbqt_path", None)
+        flex_path: Path | None = None
+        if flex_pdbqt:
+            if not engine.manifest.supports_flex_residues:
+                raise PreparationError(
+                    f"engine {job.request.engine} 不支持柔性残基，"
+                    "请使用支持 flex 的引擎（如 vina）或改用刚性受体。"
+                )
+            flex_path = Path(flex_pdbqt)
 
         def heartbeat(lines: int) -> None:
             percent = min(5.0 + lines * 0.5, 85.0)
@@ -187,6 +197,7 @@ class JobRunner:
                     job.request.box,
                     job.request.params,
                     run_dir,
+                    flex_path,
                 ),
             )
         except DockStudioError:

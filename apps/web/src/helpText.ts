@@ -6,14 +6,18 @@ export const PARAM_HELP = {
   cpu: '并行使用的 CPU 核数。默认 1；本机空闲时可调高以加速搜索。',
   scoring:
     '打分函数，用于评估姿态结合能力。默认 vina：AutoDock Vina 经典打分；引擎支持更多时可在下拉中切换。',
+  energyRange:
+    '输出姿态的能量范围（kcal/mol）：只保留与最佳姿态能量差在此范围内的姿态。默认 3.0。',
+  seed: '随机种子：留空表示随机；填入固定整数可复现实验结果。',
+  flexResidues:
+    '柔性残基：对接中允许侧链自由运动的残基。格式 链:残基号（如 A:42），多个用空格或逗号分隔，最多 10 个；留空则刚性对接。',
   boxCenter:
     '对接搜索空间的中心坐标（Å）。一般取共晶配体或已知口袋的质心；可用上一步共晶配体表的"定盒"自动填写。',
   boxSize:
     '对接搜索空间的边长（Å）。默认 22.5：覆盖常见口袋并留有余量；过大会稀释搜索、过小会漏掉结合姿态。',
+  batchLibrary:
+    '配体库文件：.sdf（多分子）/ .smi（每行 SMILES [名称]）/ .csv（含 smiles 列）。单条解析失败不影响其余条目，上限 50000 条。',
 } as const;
-
-export const HINT_ADVANCED_MODE = 'M2 提供';
-export const HINT_POCKET_SUGGESTION = 'M3 提供自动口袋预测';
 
 export const DISCLAIMER =
   '计算结果仅供科研参考，对接打分不等于实测亲和力；任何结论需结合实验验证。';
