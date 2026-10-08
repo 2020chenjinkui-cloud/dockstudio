@@ -26,6 +26,15 @@ gnina 与 Uni-Dock 仅支持 Linux + NVIDIA GPU。`docker-compose --profile gpu 
 （需要宿主机装好 NVIDIA 驱动 + NVIDIA Container Toolkit，并把 gnina/unidock Linux 二进制放到
 `resources/bin/linux-x86_64/`）。
 
+### 实测兼容性（2026-10，Tesla P4 / 驱动 580.178 / CUDA 12.9 容器环境）
+
+| 引擎 | 官方产物 | 结论 |
+|---|---|---|
+| gnina v1.3.3 | `gnina.cuda12.8.static` | ✅ 二进制非完全 static，需 `libcudnn.so.9`：从 PyPI 拿 `nvidia_cudnn_cu12` 轮子解压取 `nvidia/cudnn/lib` 加入 `LD_LIBRARY_PATH` 即可运行（其余 CUDA 库 NGC CUDA 12.9 镜像自带）。Tesla P4（CC 6.1）上 1HSG 实测 5 pose、CNN 重打分正常，75 秒完成 |
+| Uni-Dock v1.2.0 | `dptechnology/unidock` 镜像 | ❌ P4（CC 6.1）进入 GPU 对接阶段即挂死（sm_61 无内核映像）。官方产物需要 **CC ≥ 7.0（Volta+）**；P4 及以下请勿启用，或自行以 sm_61 从源码编译 |
+
+建议 gnina 的容器启动方式：以 `dptechnology/unidock`（NGC CUDA 12.9）或 `nvidia/cuda:12.8.1-cudnn-runtime-*` 为基础镜像 + 上述 cuDNN 轮子库路径。
+
 <a id="wsl2"></a>
 ## Windows 用户：WSL2 跑 GPU 引擎
 
