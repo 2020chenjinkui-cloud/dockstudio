@@ -54,7 +54,10 @@ def bundled_bin_dir() -> Path:
 
     roots: list[Path] = [Path(__file__).resolve().parents[2]]  # repo root
     if getattr(sys, "frozen", False):
-        roots.insert(0, Path(getattr(sys, "_MEIPASS", sys.executable)).parent)
+        meipass = Path(getattr(sys, "_MEIPASS", sys.executable))
+        # onedir 布局：datas 落在 _MEIPASS(resources/bin) 与其父目录两种都试
+        roots.insert(0, meipass)
+        roots.insert(0, meipass.parent)
     for root in roots:
         for name in _platform_bin_dirnames():
             candidate = root / "resources" / "bin" / name

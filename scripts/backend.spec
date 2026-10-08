@@ -21,6 +21,8 @@ block_cipher = None
 
 _ob_datas, _ob_binaries, _ob_hiddenimports = collect_all("openbabel")
 _rdkit_datas = collect_data_files("rdkit")
+_meeko_datas = collect_data_files("meeko")  # ad4_types 等参数 JSON，缺了配体准备即崩
+_gemmi_datas = collect_data_files("gemmi")
 
 a = Analysis(
     [str(ROOT / "scripts" / "server_entry.py")],
@@ -30,7 +32,9 @@ a = Analysis(
         (str(ROOT / "resources" / "bin"), "resources/bin"),
     ]
     + _ob_datas
-    + _rdkit_datas,
+    + _rdkit_datas
+    + _meeko_datas
+    + _gemmi_datas,
     hiddenimports=[
         "rdkit",
         "rdkit.Chem.AllChem",
