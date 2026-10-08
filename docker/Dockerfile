@@ -18,6 +18,9 @@ COPY resources/bin/linux-x86_64 ./resources/bin/linux-x86_64
 RUN pip install "./server" \
     && chmod +x ./resources/bin/linux-x86_64/vina || true
 
+# site-packages 布局下按仓库根找不到 resources，显式指到镜像内二进制
+ENV DOCKSTUDIO_VINA=/opt/dockstudio/resources/bin/linux-x86_64/vina
+
 ENV DOCKSTUDIO_DATA_DIR=/data
 RUN useradd -m dockstudio \
     && mkdir -p /data \
