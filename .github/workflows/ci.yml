@@ -48,7 +48,9 @@ jobs:
   server-test:
     strategy:
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-13, macos-14]
+        # macos-14 = Apple Silicon 唯一可用的免费 runner；
+        # Intel Mac（macos-13 已退役慢队列）验证转由 golden 周任务 + 发布前手测覆盖
+        os: [ubuntu-latest, windows-latest, macos-14]
         python: ["3.12"]
     runs-on: ${{ matrix.os }}
     steps:
@@ -78,7 +80,7 @@ jobs:
     needs: [server-test, web-build]
     strategy:
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-13, macos-14]
+        os: [ubuntu-latest, windows-latest, macos-14]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
