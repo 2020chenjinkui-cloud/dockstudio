@@ -1,10 +1,10 @@
+# syntax=docker/dockerfile:1
 # DockStudio backend (server mode). Build from repo root:
 #   docker build -f docker/Dockerfile -t dockstudio .
 FROM python:3.12-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1 \
-    PIP_NO_CACHE_DIR=1
+    PYTHONUNBUFFERED=1
 
 # vina needs libgomp at runtime
 RUN apt-get update \
@@ -15,7 +15,8 @@ WORKDIR /opt/dockstudio
 COPY server ./server
 COPY resources/bin/linux-x86_64 ./resources/bin/linux-x86_64
 
-RUN pip install "./server" \
+# pip 缓存挂载：重建时代码层变了也不用重下全部 wheel
+RUN --mount=type=cache,target=/root/.cache/pip pip install "./server" \
     && chmod +x ./resources/bin/linux-x86_64/vina || true
 
 # site-packages 布局下按仓库根找不到 resources，显式指到镜像内二进制
