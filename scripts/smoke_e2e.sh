@@ -5,7 +5,6 @@
 #   bash scripts/smoke_e2e.sh --base-url http://host:port   对已运行的服务做冒烟（远端/容器）
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-PORT="${PORT:-$((20000 + RANDOM % 20000))}"
 DATA_DIR="$(mktemp -d)"
 FIXTURES="$ROOT/server/tests/fixtures"
 export DOCKSTUDIO_DATA_DIR="$DATA_DIR"
@@ -19,6 +18,15 @@ if [[ "${1:-}" == "--base-url" ]]; then
   BASE_URL="${2:?missing url}"
 else
   BACKEND="${1:-}"
+fi
+
+# 冻结后端 main() 固定绑 8000；dev 模式自己起 uvicorn 才用随机端口
+if [[ -n "${PORT:-}" ]]; then
+  :
+elif [[ -n "$BACKEND" ]]; then
+  PORT=8000
+else
+  PORT=$((20000 + RANDOM % 20000))
 fi
 
 PID=""
