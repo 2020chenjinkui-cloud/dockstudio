@@ -1,0 +1,9 @@
+# 仓库统一 LF 行尾（Linux CI/远程主机/git archive 一致性）
+* text=auto eol=lf
+
+# 明确二进制
+*.png binary
+*.ico binary
+*.dll binary
+*.exe binary
+*.pdf binary
