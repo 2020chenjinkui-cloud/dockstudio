@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # 端到端冒烟：起后端 → 跑通 1HSG 真实对接 → 断言 top affinity 区间 → 停服务。
-# 用法: bash scripts/smoke_e2e.sh [后端可执行路径]
-#   不传参数时用开发模式（uvicorn）；传参时启动冻结产物。
+# 用法:
+#   bash scripts/smoke_e2e.sh [后端可执行路径]   本地：dev 模式（uvicorn）或冻结产物
+#   bash scripts/smoke_e2e.sh --base-url http://host:port   对已运行的服务做冒烟（远端/容器）
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 PORT="${PORT:-$((20000 + RANDOM % 20000))}"
@@ -12,7 +13,14 @@ export DOCKSTUDIO_DATA_DIR="$DATA_DIR"
 PY="python3"
 if [[ -n "${WINDIR:-}" ]]; then PY="py -3.12"; fi
 
-BACKEND="${1:-}"
+BASE_URL=""
+BACKEND=""
+if [[ "${1:-}" == "--base-url" ]]; then
+  BASE_URL="${2:?missing url}"
+else
+  BACKEND="${1:-}"
+fi
+
 PID=""
 LISTEN_PID=""
 cleanup() {
@@ -22,16 +30,18 @@ cleanup() {
 }
 trap cleanup EXIT
 
-if [[ -n "$BACKEND" ]]; then
-  "$BACKEND" & PID=$!
-else
-  cd "$ROOT/server"
-  DOCKSTUDIO_DATA_DIR="$DATA_DIR" $PY -m uvicorn dockstudio.api.app:create_app --factory --port "$PORT" &
-  PID=$!
-  cd "$ROOT"
+if [[ -z "$BASE_URL" ]]; then
+  if [[ -n "$BACKEND" ]]; then
+    "$BACKEND" & PID=$!
+  else
+    cd "$ROOT/server"
+    DOCKSTUDIO_DATA_DIR="$DATA_DIR" $PY -m uvicorn dockstudio.api.app:create_app --factory --port "$PORT" &
+    PID=$!
+    cd "$ROOT"
+  fi
 fi
 
-BASE="http://127.0.0.1:$PORT"
+BASE="${BASE_URL:-http://127.0.0.1:$PORT}"
 for i in $(seq 1 60); do
   curl -sf "$BASE/api/health" > /dev/null 2>&1 && break
   sleep 1
