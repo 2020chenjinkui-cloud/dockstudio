@@ -7,22 +7,30 @@
 
 产物 dist/dockstudio-backend/ 内含可执行 dockstudio-backend(.exe)，
 Tauri 将其作为 sidecar 携带；也可独立分发作免前端的服务器模式。
-注意：rdkit/openbabel/meeko 的隐式 import 若漏打包，在 hiddenimports 里补。
+注意：openbabel 的格式插件（BABEL_LIBDIR）与 rdkit 的数据文件（BaseFeatures 等）
+必须随包收集，否则冻结后端启动即崩（macOS CI 实测）。
 """
 
 from pathlib import Path
+
+from PyInstaller.utils.hooks import collect_all, collect_data_files
 
 ROOT = Path(SPECPATH).parent  # noqa: F821  SPECPATH 由 PyInstaller 注入
 
 block_cipher = None
 
+_ob_datas, _ob_binaries, _ob_hiddenimports = collect_all("openbabel")
+_rdkit_datas = collect_data_files("rdkit")
+
 a = Analysis(
     [str(ROOT / "scripts" / "server_entry.py")],
     pathex=[str(ROOT / "server")],
-    binaries=[],
+    binaries=_ob_binaries,
     datas=[
         (str(ROOT / "resources" / "bin"), "resources/bin"),
-    ],
+    ]
+    + _ob_datas
+    + _rdkit_datas,
     hiddenimports=[
         "rdkit",
         "rdkit.Chem.AllChem",
@@ -32,9 +40,10 @@ a = Analysis(
         "gemmi",
         "uvicorn.lifespan",
         "uvicorn.protocols",
-    ],
+    ]
+    + _ob_hiddenimports,
     hookspath=[],
-    runtime_hooks=[],
+    runtime_hooks=[str(ROOT / "scripts" / "pyi_obabel_hook.py")],
     excludes=["tkinter", "matplotlib"],
     cipher=block_cipher,
     noarchive=False,
