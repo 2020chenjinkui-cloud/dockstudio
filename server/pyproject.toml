@@ -47,6 +47,8 @@ target-version = "py310"
 [tool.ruff.lint.per-file-ignores]
 # frozen groundwork file, kept verbatim per project constraint
 "dockstudio/config.py" = ["UP037"]
+# 包入口是刻意的导入顺序工程（ABI 冲突防护），sort/try-except 规则不适用
+"dockstudio/__init__.py" = ["I001", "S110", "S112"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

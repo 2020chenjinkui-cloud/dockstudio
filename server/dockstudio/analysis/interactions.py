@@ -64,6 +64,25 @@ def _build_complex_pdb(protein_pdb: Path, pose_sdf: Path, out_path: Path) -> Non
     out_path.write_text("\n".join(protein_lines + lig_lines + ["END", ""]), encoding="utf-8")
 
 
+def _run_plip_subprocess(protein_pdb: Path, pose_sdf: Path, work_dir: Path) -> list[Interaction]:
+    """Run PLIP in an isolated process (Linux manylinux 下 rdkit↔openbabel 共进程会段错误）。"""
+    import subprocess
+    import sys
+
+    worker = Path(__file__).with_name("plip_worker.py")
+    proc = subprocess.run(
+        [sys.executable, str(worker), str(protein_pdb), str(pose_sdf), str(work_dir)],
+        capture_output=True,
+        text=True,
+        timeout=180,
+        check=False,
+    )
+    if proc.returncode != 0:
+        raise RuntimeError(f"plip worker failed ({proc.returncode}): {proc.stderr.strip()[:300]}")
+    raw = json.loads(proc.stdout)
+    return [Interaction(**item) for item in raw]
+
+
 def _run_plip(protein_pdb: Path, pose_sdf: Path, work_dir: Path) -> list[Interaction]:
     _patch_openbabel_for_plip()
     import plip  # noqa: F401
@@ -323,6 +342,10 @@ def analyze_pose(
     box: Box | None = None,
 ) -> PoseAnalysis:
     """Analyze one pose against the protein. Tries PLIP, falls back to builtin."""
+    import os
+
+    if os.environ.get("DOCKSTUDIO_NO_PLIP") == "1":
+        use_plip = False
     from .posecheck import check_pose
 
     pose_idx = int(pose_sdf.stem.rsplit("_", 1)[-1]) if "_" in pose_sdf.stem else 1
@@ -335,7 +358,7 @@ def analyze_pose(
         warnings.append(f"姿态质检失败（不影响分析）: {exc}")
     if use_plip and _plip_available():
         try:
-            interactions = _run_plip(protein_pdb, pose_sdf, work_dir)
+            interactions = _run_plip_subprocess(protein_pdb, pose_sdf, work_dir)
             return PoseAnalysis(
                 pose_index=pose_idx,
                 source="plip",
