@@ -117,6 +117,7 @@ def main() -> int:
                 }
             )
     json.dump(interactions, sys.stdout, ensure_ascii=False)
+    sys.stdout.flush()
     return 0
 
 

@@ -74,6 +74,8 @@ def _run_plip_subprocess(protein_pdb: Path, pose_sdf: Path, work_dir: Path) -> l
         [sys.executable, str(worker), str(protein_pdb), str(pose_sdf), str(work_dir)],
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         timeout=180,
         check=False,
     )
