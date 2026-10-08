@@ -47,7 +47,7 @@ for i in $(seq 1 60); do
   sleep 1
   if [[ "$i" == 60 ]]; then echo "server did not start"; exit 1; fi
 done
-LISTEN_PID="$(netstat -ano 2>/dev/null | grep ":$PORT" | grep LISTEN | awk '{print $NF}' | head -1)"
+LISTEN_PID="$(netstat -ano 2>/dev/null | grep ":$PORT" | grep LISTEN | awk '{print $NF}' | head -1 || true)"
 
 echo "[smoke] engines:"
 curl -sf "$BASE/api/engines" | head -c 200; echo
