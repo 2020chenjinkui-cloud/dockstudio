@@ -57,6 +57,15 @@ def _find_plugin_dir() -> Path | None:
 _plugin_dir = _find_plugin_dir()
 if _plugin_dir is not None:
     os.environ.setdefault("BABEL_LIBDIR", str(_plugin_dir))
+else:
+    # CI 诊断：插件目录缺失时把探查结果打到 stderr
+    _ob_root = _meipass / "openbabel"
+    print(
+        f"[pyi_obabel_hook] plugin dir NOT found. meipass={_meipass} "
+        f"openbabel_dir_exists={_ob_root.is_dir()} "
+        f"listing={list(_ob_root.iterdir())[:10] if _ob_root.is_dir() else 'N/A'}",
+        file=sys.stderr,
+    )
 
 # 数据文件（力场参数等）位置：openbabel/share/openbabel/<ver>
 for _cand in (
