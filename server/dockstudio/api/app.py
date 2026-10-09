@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import traceback
+import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
@@ -38,6 +39,8 @@ from ..core.queue import EventBus, JobRunner
 from ..engines import available_engines, get_engine
 from ..logging import get_logger, setup_logging
 from ..models import (
+    AiRescoreRequest,
+    AiRescoreTask,
     BatchCreate,
     DockJobRequest,
     DockResult,
@@ -129,13 +132,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     bus = EventBus()
     runner = JobRunner(store, registry, bus)
     batches = BatchStore(settings, store)
+    from ..analysis.ai_rescore import RescoreRunner
+
+    rescore = RescoreRunner(store, settings, registry)
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
         runner.start()
+        rescore.start()
         try:
             yield
         finally:
+            rescore.stop()
             await runner.stop()
 
     app = FastAPI(title="DockStudio", version=__version__, lifespan=lifespan)
@@ -143,6 +151,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.registry = registry
     app.state.store = store
     app.state.runner = runner
+    app.state.rescore = rescore
 
     app.add_middleware(
         CORSMiddleware,
@@ -523,6 +532,68 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "avg_dock_seconds": (round(sum(durations) / len(durations), 2) if durations else None),
             "by_engine": by_engine,
         }
+
+    # ------------------------------------------------------------- M4: AI rescore (Boltz-2)
+
+    @app.get("/api/capabilities")
+    async def capabilities() -> dict:
+        from ..analysis.ai_rescore import get_availability
+
+        return {"ai_rescore": get_availability().model_dump()}
+
+    @app.post("/api/jobs/{jid}/rescore/ai", status_code=202)
+    async def submit_rescore(jid: str, body: AiRescoreRequest | None = None):
+        from ..analysis.ai_rescore import get_availability
+
+        job = runner.get_job(jid)
+        if job is None:
+            return _not_found("job")
+        if job.status != JobStatus.completed or job.result is None:
+            return _error(400, f"job is not completed (status={job.status.value})")
+        available = get_availability()
+        if not available.available:
+            return _error(503, available.reason or "Boltz-2 不可用")
+        body = body or AiRescoreRequest()
+        n_poses = len(job.result.poses)
+        pose_indices = body.pose_indices or list(range(1, n_poses + 1))
+        if any(i < 1 or i > n_poses for i in pose_indices):
+            return _error(400, f"pose_indices 超出范围（1..{n_poses}）")
+        if not pose_indices:
+            return _error(400, "pose_indices 为空")
+        task = AiRescoreTask(
+            id=uuid.uuid4().hex[:8],
+            job_id=job.id,
+            pose_indices=pose_indices,
+            created_at=datetime.now(),  # noqa: DTZ005
+            msa_server_used=body.use_msa_server,
+        )
+        rescore.submit(task, job)
+        return {"task_id": task.id}
+
+    @app.get("/api/jobs/{jid}/rescore")
+    async def list_rescore(jid: str):
+        job = runner.get_job(jid)
+        if job is None:
+            return _not_found("job")
+        return [t.model_dump(mode="json") for t in rescore.tasks_of_job(job)]
+
+    @app.get("/api/rescore/{task_id}")
+    async def get_rescore(task_id: str):
+        task = rescore.get_task(task_id)
+        if task is None:
+            return _not_found("rescore task")
+        return task
+
+    @app.post("/api/rescore/{task_id}/cancel")
+    async def cancel_rescore(task_id: str):
+        task = rescore.get_task(task_id)
+        if task is None:
+            return _not_found("rescore task")
+        job = runner.get_job(task.job_id)
+        if job is None:
+            return _not_found("rescore task job")
+        result = rescore.cancel(task_id, job)
+        return result if result is not None else task
 
     # ------------------------------------------------------------- M1: WebSocket
 

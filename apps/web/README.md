@@ -1,6 +1,6 @@
 # DockStudio Web
 
-React 18 + Vite + TypeScript 前端。契约见 `docs/api-contract.md`（当前 v0.4）。
+React 18 + Vite + TypeScript 前端。契约见 `docs/api-contract.md`（当前 v0.5）。
 
 ## 路由
 
@@ -11,6 +11,7 @@ React 18 + Vite + TypeScript 前端。契约见 `docs/api-contract.md`（当前 
   - 对接位点步：口袋预测（/api/pockets，按 score 排序 + 横条可视化，点选定盒）
   - 任务进度：WS 订阅，断线自动降级 2s 轮询（job 与 batch 同理）
   - 结果页：姿态表联动 3D、姿态质检徽章（pose_check，最高 severity 配色，点击弹出 issues，"只看合格"过滤）、相互作用残基高亮与 2D 示意图 tab（/api/jobs/{jid}/diagram）、等效命令行卡（可复制）、报告 v2 下载对话框（章节勾选 + 自定义标题）
+  - AI 复核（Boltz-2）：按 /api/capabilities 置灰（tooltip 安装指引 + docs/ai.md 提示）；对话框多选姿态（默认 top 3）+ MSA 服务器开关（默认开，红字提示序列外发）；3s 轮询进度 + 可取消；姿态表合并最新复核结果（logIC50 三位小数 / binder% 一位，表头与单元格 hover 注明 AI 独立预测）；复核历史列表可取消进行中任务；MSA 使用记录常驻红字提示
   - 结果对比：历史抽屉勾选 ≥2 个已完成任务 → 对比模态（最优 affinity 加粗高亮，前端导出 CSV，跨项目可混选）
   - 批量进度页：分段进度条（done/running/failed/canceled/queued）、排行榜（分页 + affinity 排序 + 导 CSV + 行跳 job 结果页）
 - `/debug` — M0 调试台（prepare/dock/file 原始链路，保留供排查）
@@ -56,12 +57,13 @@ npm run dev   # http://localhost:5173
 - `src/flex.ts` — 柔性残基输入解析与校验（格式、链存在性、去重、上限 10）
 - `src/cli.ts` — 由 DockRequest 渲染等效 vina 命令行
 - `src/compare.ts` — 对比选择逻辑与 CSV 生成
+- `src/rescore.ts` — AI 复核结果合并（最新一次完成任务为权威）、默认姿态选择、表单校验
 - `src/helpText.ts` — 帮助与提示文案（zh 单一事实来源，i18n zh 包引用）
 - `src/router.ts` — 极简 history 路由
 - `src/MolViewer.tsx` — 3Dmol.js 查看器（cartoon + 口袋 stick + 半透明盒、姿态/残基高亮）
 - `src/App.tsx` — I18nProvider、路由分发与主界面壳（项目选择、空状态、onboarding、对比模态）
 - `src/DebugPage.tsx` — M0 调试台
-- `src/components/` — ProjectBar、ConfirmDialog、OnboardingOverlay、Tooltip、CliCard、StatsChip、ReportDialog、CompareDialog 及 `wizard/`（Wizard、五个步骤、StepBatch、BatchPanel）
+- `src/components/` — ProjectBar、ConfirmDialog、OnboardingOverlay、Tooltip、CliCard、StatsChip、ReportDialog、CompareDialog、AiRescoreSection、AiRescoreDialog 及 `wizard/`（Wizard、五个步骤、StepBatch、BatchPanel）
 - `src/*.test.ts` — vitest 单测
 
 ## TODO
@@ -69,4 +71,7 @@ npm run dev   # http://localhost:5173
 - TODO(M1 遗留): 3D 查看器由 3Dmol.js 迁移到 Mol*；`/api/file` 调试接口替换为项目内文件接口。
 - TODO: `GET /api/prepare/receptors` 若一次返回大量 flex 变体，库列表需加过滤（变体/原始分组）。
 - TODO: 排行榜排序目前固定 affinity asc，等后端确认更多 sort 字段后再开放表头排序。
-- TODO: onboarding 与 /debug 页尚未接 i18n；免责声明长文案待 M4 统一走文案资源。
+- TODO: onboarding 与 /debug 页尚未接 i18n；免责声明长文案待后续统一走文案资源。
+- TODO(M4 联调点): `binder_probability` 前端按 0–1 处理（×100 显示百分比）；若后端直接给 0–100 需去掉换算。
+- TODO(M4 联调点): 复核合并视图取"最新一次有结果的任务"（按 finished_at，缺失回退 created_at）；若后端采用"最后一次成功"语义则一致，若需跨任务合并多姿态覆盖再调 `mergeRescoreResults`。
+- TODO: 复核进度轮询间隔 3s（裸 HTTP，无 WS）；v0.5 契约未给复核 WS，后续若加可复用 subscribeJob 模式。

@@ -1,11 +1,15 @@
 import { isTerminalStatus } from './labels';
 import type {
+  AiRescoreRequest,
+  AiRescoreTask,
   BatchCreateRequest,
   BatchEvent,
   BatchResults,
   BatchSummary,
+  Capabilities,
   ComparisonResult,
   CreateBatchResponse,
+  CreateRescoreResponse,
   CreateJobResponse,
   DockRequest,
   DockResult,
@@ -426,4 +430,29 @@ export async function compareJobs(jobIds: string[]): Promise<ComparisonResult> {
 
 export async function getStats(): Promise<Stats> {
   return req<Stats>('/api/stats');
+}
+
+// ---- AI 复核（Boltz-2）----
+
+export async function getCapabilities(): Promise<Capabilities> {
+  return req<Capabilities>('/api/capabilities');
+}
+
+export async function createAiRescore(
+  jid: string,
+  body: AiRescoreRequest,
+): Promise<CreateRescoreResponse> {
+  return postJson<CreateRescoreResponse>(`/api/jobs/${jid}/rescore/ai`, body);
+}
+
+export async function listRescoreTasks(jid: string): Promise<AiRescoreTask[]> {
+  return req<AiRescoreTask[]>(`/api/jobs/${jid}/rescore`);
+}
+
+export async function getRescoreTask(taskId: string): Promise<AiRescoreTask> {
+  return req<AiRescoreTask>(`/api/rescore/${taskId}`);
+}
+
+export async function cancelRescoreTask(taskId: string): Promise<AiRescoreTask> {
+  return req<AiRescoreTask>(`/api/rescore/${taskId}/cancel`, { method: 'POST' });
 }

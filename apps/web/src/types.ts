@@ -218,6 +218,47 @@ export interface Stats {
   by_engine: Record<string, number>;
 }
 
+// ---- API v0.5 ----
+
+export interface AiAvailability {
+  available: boolean;
+  reason: string;
+  mode: 'venv' | 'cmd' | null;
+}
+
+export interface Capabilities {
+  ai_rescore: AiAvailability;
+}
+
+export interface AiRescoreRequest {
+  pose_indices?: number[];
+  use_msa_server?: boolean;
+}
+
+export interface CreateRescoreResponse {
+  task_id: string;
+}
+
+export interface AiRescoreResult {
+  pose_index: number;
+  log_ic50: number;
+  binder_probability: number;
+  rank_by_score: number;
+}
+
+export interface AiRescoreTask {
+  id: string;
+  job_id: string;
+  status: JobStatus;
+  progress: JobProgress;
+  pose_indices: number[];
+  results: AiRescoreResult[];
+  error: string | null;
+  created_at: string;
+  finished_at: string | null;
+  msa_server_used: boolean;
+}
+
 // ---- API v0.3 ----
 
 export interface Pocket {

@@ -21,3 +21,14 @@ export const PARAM_HELP = {
 
 export const DISCLAIMER =
   '计算结果仅供科研参考，对接打分不等于实测亲和力；任何结论需结合实验验证。';
+
+export const AI_HELP = {
+  what:
+    'AI 复核用 Boltz-2 对选定姿态独立预测 log(IC50) 与结合概率，与 vina 打分互不依赖；数值不一致属正常，用于交叉验证打分可靠性。',
+  logIC50:
+    'log10(IC50, μM)：AI 预测的半数抑制浓度对数值。越低预测亲和力越强；与 vina affinity 是两套独立模型，不保证一致。',
+  binderProb:
+    'binder_probability：AI 判断该小分子为真实结合者的概率（0–100%）。越高越可信，但仍是计算预测，需实验验证。',
+} as const;
+
+export const AI_DOC_HINT = '安装与配置指引见仓库 docs/ai.md。';

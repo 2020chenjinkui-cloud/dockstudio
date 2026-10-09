@@ -12,3 +12,4 @@ resources/bin/
 apps/desktop/src-tauri/target/
 apps/web/dist/
 .DS_Store
+apps/desktop/src-tauri/binaries/

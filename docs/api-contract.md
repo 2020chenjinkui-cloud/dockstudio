@@ -131,3 +131,23 @@ Body = `BatchCreate {name?, engine, receptor_id, ligand_ids[], box, params}` →
 - 新增 gnina 适配器：manifest platforms=["linux"]，requires_gpu=true（CPU 可跑但极慢，unavailable_reason 如实说明，WSL2 用户按指引自查）；scoring_functions=["vina","vinardo","ad4_scoring","dkoes_fast"]，supports_flex_residues。
 - 新增 unidock 适配器：platforms=["linux"]，requires_gpu=true，supports_batch_ligands=true。
 - 二进制解析顺序统一：env(var) → PATH → resources/bin/<platform>/。
+
+---
+
+# v0.5 增量（M4：Boltz-2 AI 复核）
+
+## GET /api/capabilities
+→ `{ai_rescore: AiAvailability}`。`mode: "venv"`（DOCKSTUDIO_BOLTZ 指向装了 boltz 的 Python）
+或 `"cmd"`（DOCKSTUDIO_BOLTZ_CMD 自定义命令前缀）。均未配置则 available=false + 中文安装指引。
+
+## POST /api/jobs/{jid}/rescore/ai
+Body = `AiRescoreRequest {pose_indices?: int[], use_msa_server?: true}` → 202 `{task_id}`。
+排队执行（复用串行队列思想，但与对接任务互不阻塞亦可）：对选定姿态逐姿态调 Boltz-2。
+不可用时 503 + detail 指引。msa_server_used=true 时结果页必须提示"蛋白序列已发送至公共 MSA 服务器"。
+
+## GET /api/jobs/{jid}/rescore
+→ 该 job 全部复核任务 `[AiRescoreTask]`（含进行中）。
+## GET /api/rescore/{task_id} → `AiRescoreTask`
+## POST /api/rescore/{task_id}/cancel → `AiRescoreTask`（尽力）
+
+结果展示：pose 表新增 `log_ic50` 与 `binder_probability` 两列（有复核结果时），与 vina affinity 并排。

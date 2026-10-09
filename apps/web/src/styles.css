@@ -1248,3 +1248,74 @@ button.danger-outline {
 .cmp-button {
   width: 100%;
 }
+
+/* ---- M4 / v0.5 ---- */
+
+.ai-section {
+  border-top: 1px solid #2a3342;
+  margin-top: 14px;
+  padding-top: 10px;
+}
+
+.ai-launch {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.ai-docs-hint {
+  font-size: 12px;
+  max-width: 200px;
+}
+
+.ai-reason {
+  font-size: 12.5px;
+  max-width: 460px;
+  white-space: pre-line;
+}
+
+.ai-warn {
+  color: #f08a97;
+  font-size: 12.5px;
+  margin: 8px 0 0;
+}
+
+.ai-pose-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 6px;
+  margin: 10px 0 14px;
+}
+
+.ai-running {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 10px 0;
+}
+
+.ai-history summary {
+  cursor: pointer;
+  color: #9fb4d0;
+  font-size: 13px;
+}
+
+.ai-history .job-list {
+  margin-top: 8px;
+}
+
+.ai-task-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: #12161d;
+  border: 1px solid #3b4757;
+  border-radius: 6px;
+  padding: 6px 12px;
+  font-size: 13px;
+}
+
+.ai-mix-note {
+  font-size: 12px;
+  margin-top: 6px;
+}

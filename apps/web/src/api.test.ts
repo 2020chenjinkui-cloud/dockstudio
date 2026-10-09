@@ -213,3 +213,55 @@ describe('api v0.4', () => {
     expect(url).toBe('/api/compare?job_ids=a,b,c');
   });
 });
+
+describe('api v0.5', () => {
+  it('getCapabilities 打 /api/capabilities', async () => {
+    const payload = { ai_rescore: { available: false, reason: '未配置', mode: null } };
+    const spy = vi.fn().mockResolvedValue(jsonResponse(payload));
+    vi.stubGlobal('fetch', spy);
+    const { getCapabilities } = await import('./api');
+    const res = await getCapabilities();
+    expect(res.ai_rescore.available).toBe(false);
+    const [url] = spy.mock.calls[0] as [string];
+    expect(url).toBe('/api/capabilities');
+  });
+
+  it('createAiRescore POST pose_indices 与 use_msa_server', async () => {
+    const spy = vi.fn().mockResolvedValue(jsonResponse({ task_id: 'task1' }, 202));
+    vi.stubGlobal('fetch', spy);
+    const { createAiRescore } = await import('./api');
+    const res = await createAiRescore('j1', { pose_indices: [1, 2, 3], use_msa_server: true });
+    expect(res.task_id).toBe('task1');
+    const [url, init] = spy.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('/api/jobs/j1/rescore/ai');
+    expect(JSON.parse(init.body as string)).toEqual({
+      pose_indices: [1, 2, 3],
+      use_msa_server: true,
+    });
+  });
+
+  it('createAiRescore 503 时透出 detail 指引', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(jsonResponse({ detail: '未检测到 Boltz-2，见 docs/ai.md' }, 503)),
+    );
+    const { createAiRescore } = await import('./api');
+    const err = await createAiRescore('j1', {}).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ApiError);
+    expect((err as ApiError).message).toContain('Boltz-2');
+    expect((err as ApiError).status).toBe(503);
+  });
+
+  it('listRescoreTasks / getRescoreTask / cancelRescoreTask 路径正确', async () => {
+    const spy = vi.fn().mockImplementation(() => Promise.resolve(jsonResponse([])));
+    vi.stubGlobal('fetch', spy);
+    const { listRescoreTasks, getRescoreTask, cancelRescoreTask } = await import('./api');
+    await listRescoreTasks('j1');
+    await getRescoreTask('t1');
+    await cancelRescoreTask('t1');
+    const urls = spy.mock.calls.map((c) => (c as [string, RequestInit?])[0]);
+    expect(urls).toEqual(['/api/jobs/j1/rescore', '/api/rescore/t1', '/api/rescore/t1/cancel']);
+    const cancel = spy.mock.calls[2] as [string, RequestInit];
+    expect(cancel[1].method).toBe('POST');
+  });
+});

@@ -11,7 +11,16 @@ import { DISCLAIMER } from '../../helpText';
 import { useI18n } from '../../i18n';
 import { interactionTypeLabel, parseResidue, poseCheckBadge } from '../../labels';
 import MolViewer, { type ResidueHighlight, type ViewerPose } from '../../MolViewer';
-import type { Job, PoseAnalysis, PoseIssue, PreparedReceptor } from '../../types';
+import { mergeRescoreResults } from '../../rescore';
+import type {
+  AiRescoreResult,
+  AiRescoreTask,
+  Job,
+  PoseAnalysis,
+  PoseIssue,
+  PreparedReceptor,
+} from '../../types';
+import AiRescoreSection from '../AiRescoreSection';
 import CliCard from '../CliCard';
 import ReportDialog from '../ReportDialog';
 
@@ -39,6 +48,9 @@ export default function StepResults({ jobId, job, onJobUpdate }: StepResultsProp
   const [rightTab, setRightTab] = useState<RightTab>('interactions');
   const [diagramError, setDiagramError] = useState(false);
   const [reportOpen, setReportOpen] = useState(false);
+  const [rescoreTasks, setRescoreTasks] = useState<AiRescoreTask[]>([]);
+
+  const aiMap = useMemo(() => mergeRescoreResults(rescoreTasks), [rescoreTasks]);
 
   useEffect(() => {
     if (job) return;
@@ -193,6 +205,8 @@ export default function StepResults({ jobId, job, onJobUpdate }: StepResultsProp
                 <th></th>
                 <th>#</th>
                 <th>affinity</th>
+                <th title={t('ai.note.logIC50')}>{t('ai.th.logIC50')}</th>
+                <th title={t('ai.note.binder')}>{t('ai.th.binder')}</th>
                 <th>rmsd 区间</th>
                 <th>质检</th>
               </tr>
@@ -203,6 +217,7 @@ export default function StepResults({ jobId, job, onJobUpdate }: StepResultsProp
                   key={p.index}
                   pose={p}
                   analysis={analyses[p.index]}
+                  ai={aiMap[p.index]}
                   selected={selectedPose === p.index}
                   visible={poseVisible[p.index] ?? true}
                   hasText={Boolean(poseTexts[p.index])}
@@ -219,6 +234,11 @@ export default function StepResults({ jobId, job, onJobUpdate }: StepResultsProp
         )}
         {onlyPass && visiblePoses.length === 0 && result.poses.length > 0 && (
           <p className="muted">当前没有质检合格的姿态。</p>
+        )}
+        {Object.keys(aiMap).length > 0 && (
+          <p className="muted ai-mix-note" title={t('ai.note.logIC50')}>
+            {t('ai.mixNotice')}
+          </p>
         )}
 
         <div className="tabs results-tabs">
@@ -290,6 +310,7 @@ export default function StepResults({ jobId, job, onJobUpdate }: StepResultsProp
         )}
 
         <CliCard request={job.request} flex={receptor?.parent_id != null} />
+        <AiRescoreSection jobId={jobId} poseCount={result.poses.length} onTasks={setRescoreTasks} />
         <div className="row">
           <button className="primary" onClick={() => setReportOpen(true)}>
             {t('report.download')}
@@ -351,6 +372,7 @@ export default function StepResults({ jobId, job, onJobUpdate }: StepResultsProp
 interface PoseRowProps {
   pose: { index: number; affinity: number; rmsd_lb: number; rmsd_ub: number };
   analysis: PoseAnalysis | undefined;
+  ai: AiRescoreResult | undefined;
   selected: boolean;
   visible: boolean;
   hasText: boolean;
@@ -363,6 +385,7 @@ interface PoseRowProps {
 function PoseRow({
   pose,
   analysis,
+  ai,
   selected,
   visible,
   hasText,
@@ -385,6 +408,12 @@ function PoseRow({
       </td>
       <td>{pose.index}</td>
       <td>{pose.affinity.toFixed(1)}</td>
+      <td title={ai ? t('ai.note.logIC50') : undefined}>
+        {ai ? ai.log_ic50.toFixed(3) : '—'}
+      </td>
+      <td title={ai ? t('ai.note.binder') : undefined}>
+        {ai ? `${(ai.binder_probability * 100).toFixed(1)}%` : '—'}
+      </td>
       <td>
         {pose.rmsd_lb.toFixed(1)} – {pose.rmsd_ub.toFixed(1)}
       </td>

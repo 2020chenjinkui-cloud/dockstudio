@@ -259,6 +259,41 @@ class ComparisonResult(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# M4: Boltz-2 AI 亲和性复核
+
+
+class AiRescorePoseResult(BaseModel):
+    pose_index: int
+    log_ic50: float | None = None  # Boltz-2 affinity_pred_value（log10 IC50，μM 基准）
+    binder_probability: float | None = None  # affinity_probability_binary 0-1
+    rank_by_score: int | None = None
+
+
+class AiRescoreTask(BaseModel):
+    id: str
+    job_id: str
+    status: JobStatus = JobStatus.queued
+    progress: JobProgress = Field(default_factory=JobProgress)
+    pose_indices: list[int] = Field(default_factory=list)
+    results: list[AiRescorePoseResult] = Field(default_factory=list)
+    error: str | None = None
+    created_at: datetime
+    finished_at: datetime | None = None
+    msa_server_used: bool = True  # True=序列经公共 ColabFold MSA 服务器（有提示义务）
+
+
+class AiRescoreRequest(BaseModel):
+    pose_indices: list[int] | None = None  # None=全部姿态
+    use_msa_server: bool = True
+
+
+class AiAvailability(BaseModel):
+    available: bool
+    reason: str | None = None  # 不可用时的中文说明/安装指引
+    mode: str | None = None  # "venv" | "cmd" | None
+
+
+# ---------------------------------------------------------------------------
 # Errors
 
 
