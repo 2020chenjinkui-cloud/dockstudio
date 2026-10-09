@@ -124,6 +124,7 @@ jobs:
       - name: Rename sidecar per target triple
         run: bash scripts/stage_sidecar.sh
       - run: cd apps/web && npm ci && npm run build
+      - run: cd apps/desktop && npm ci
       - name: Tauri Build (bundle=true)
         uses: tauri-apps/tauri-action@v0
         with:
