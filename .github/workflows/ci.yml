@@ -98,25 +98,41 @@ jobs:
           path: dist/dockstudio-backend/
 
   desktop-build:
-    # M0：Tauri 壳配置骨架验证；本条在 alpha 前允许失败（图标/签名未备）
-    continue-on-error: true
-    needs: package-backend
+    # 自包含 onefile 后端 sidecar + 完整安装包（nsis/dmg/appimage）
+    needs: [server-test, web-build]
     strategy:
       matrix:
         os: [ubuntu-latest, windows-latest, macos-14]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
       - uses: actions/setup-node@v4
         with:
           node-version: 24
       - uses: dtolnay/rust-toolchain@stable
-      - run: cd apps/web && npm ci && npm run build
-      - name: Stage backend sidecar
-        uses: actions/download-artifact@v4
         with:
-          name: dockstudio-backend-${{ matrix.os }}
-          path: apps/desktop/src-tauri/binaries
+          cache: workspaces -> apps/desktop/src-tauri
+      - name: Linux WebKitGTK 依赖
+        if: matrix.os == 'ubuntu-latest'
+        run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+      - run: bash scripts/fetch_engines.sh
+      - run: pip install -e "server[dev]" pyinstaller
+      - run: pyinstaller scripts/backend_onefile.spec --noconfirm --clean
       - name: Rename sidecar per target triple
         run: bash scripts/stage_sidecar.sh
-      - run: cd apps/desktop && npm ci && npx tauri build --no-bundle
+      - run: cd apps/web && npm ci && npm run build
+      - name: Tauri Build (bundle=true)
+        uses: tauri-apps/tauri-action@v0
+        with:
+          projectPath: apps/desktop
+      - uses: actions/upload-artifact@v4
+        with:
+          name: installer-${{ matrix.os }}
+          path: |
+            apps/desktop/src-tauri/target/release/bundle/nsis/*.exe
+            apps/desktop/src-tauri/target/release/bundle/dmg/*.dmg
+            apps/desktop/src-tauri/target/release/bundle/appimage/*.AppImage
+            apps/desktop/src-tauri/target/release/bundle/deb/*.deb

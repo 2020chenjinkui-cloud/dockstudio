@@ -17,7 +17,7 @@ fn main() {
         .setup(|app| {
             let shell = app.shell();
             let sidecar = shell
-                .sidecar("binaries/dockstudio-backend")
+                .sidecar("dockstudio-backend")
                 .expect("backend sidecar not bundled");
             let (mut rx, child) = sidecar.spawn().expect("failed to spawn backend");
             app.manage(BackendChild(std::sync::Mutex::new(Some(child))));
@@ -32,8 +32,12 @@ fn main() {
         })
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::Destroyed = event {
-                let state = window.state::<BackendChild>();
-                if let Some(child) = state.0.lock().unwrap().take() {
+                let child = {
+                    let state = window.state::<BackendChild>();
+                    let x = state.0.lock().unwrap().take();
+                    x
+                };
+                if let Some(child) = child {
                     let _ = child.kill();
                 }
             }

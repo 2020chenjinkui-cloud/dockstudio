@@ -15,7 +15,14 @@
     "publisher": "DockStudio",
     "shortDescription": "跨平台分子对接平台",
     "longDescription": "DockStudio：跨平台（Windows/macOS/Linux）分子对接平台，简易五步向导 + 高级批量筛选模式。",
-    "icon": ["icons/32x32.png", "icons/128x128.png", "icons/icon.png", "icons/icon.ico"],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico",
+      "icons/icon.png"
+    ],
     "externalBin": ["binaries/dockstudio-backend"],
     "windows": {
       "certificateThumbprint": null,
@@ -24,7 +31,7 @@
       "nsis": {
         "displayLanguageSelector": false,
         "languages": ["SimpChinese"],
-        "installMode": "perMachine"
+        "installMode": "currentUser"
       }
     }
   },
