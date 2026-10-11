@@ -63,7 +63,7 @@ def test_report_contains_key_fields(tmp_path: Path) -> None:
             Interaction(type="hydrophobic", residue="ILE50:B", distance=3.6),
         ],
     )
-    project = Project(id="p1", name="HIV 蛋白酶", path=str(tmp_path), created_at=datetime.now())  # noqa: DTZ005
+    project = Project(id="p1", name="HIV 蛋白酶", path=str(tmp_path), created_at=datetime.now())
     request = DockJobRequest(
         receptor_id="rec123",
         ligand_id="lig456",

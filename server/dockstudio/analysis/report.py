@@ -120,7 +120,7 @@ def generate_report(
     )
     snapshot_rows = [
         ("项目", project.name),
-        ("生成时间", datetime.now().strftime("%Y-%m-%d %H:%M:%S")),  # noqa: DTZ005
+        ("生成时间", datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
         ("引擎", engine_line),
         ("受体", receptor_name),
         ("配体", ligand_name),
@@ -137,7 +137,7 @@ def generate_report(
     snapshot_html = "\n".join(
         f"<tr><th>{_esc(k)}</th><td>{_esc(v)}</td></tr>" for k, v in snapshot_rows
     )
-    NOW_TAG = datetime.now().strftime("%Y-%m-%d %H:%M")  # noqa: DTZ005
+    NOW_TAG = datetime.now().strftime("%Y-%m-%d %H:%M")
 
     snapshot_block = ""
     if "snapshot" in want:

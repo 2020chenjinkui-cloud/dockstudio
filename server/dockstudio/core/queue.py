@@ -96,7 +96,7 @@ class JobRunner:
             self._cancel_requested.add(job_id)
             job.status = JobStatus.canceled
             job.progress.message = "已取消"
-            job.finished_at = datetime.now()  # noqa: DTZ005
+            job.finished_at = datetime.now()
             self.store.save_job(job)
             self._emit_finished(job)
             return job
@@ -143,7 +143,7 @@ class JobRunner:
                 if job is not None and not job.is_terminal:
                     job.status = JobStatus.failed
                     job.error = f"内部错误: {exc}"
-                    job.finished_at = datetime.now()  # noqa: DTZ005
+                    job.finished_at = datetime.now()
                     self.store.save_job(job)
                     self._emit_finished(job)
                     self._lifecycle(job, "job.failed", {"error": job.error})
@@ -161,7 +161,7 @@ class JobRunner:
     async def _run(self, job: Job) -> None:
         loop = asyncio.get_running_loop()
         job.status = JobStatus.running
-        job.started_at = datetime.now()  # noqa: DTZ005
+        job.started_at = datetime.now()
         self._set_progress(job, "docking", 5.0, "对接中")
         self._emit_status(job)
         self._lifecycle(job, "job.started", {"engine": job.request.engine})
@@ -217,7 +217,7 @@ class JobRunner:
             if job.id in self._cancel_requested:
                 job.status = JobStatus.canceled
                 job.progress.message = "已取消"
-                job.finished_at = datetime.now()  # noqa: DTZ005
+                job.finished_at = datetime.now()
                 self.store.save_job(job)
                 self._emit_finished(job)
                 self._lifecycle(job, "job.canceled", {})
@@ -227,7 +227,7 @@ class JobRunner:
         if job.id in self._cancel_requested:
             job.status = JobStatus.canceled
             job.progress.message = "已取消"
-            job.finished_at = datetime.now()  # noqa: DTZ005
+            job.finished_at = datetime.now()
             self.store.save_job(job)
             self._emit_finished(job)
             self._lifecycle(job, "job.canceled", {})
@@ -256,7 +256,7 @@ class JobRunner:
         job.result = result
         job.status = JobStatus.completed
         job.progress = JobProgress(stage="done", percent=100.0, message="完成")
-        job.finished_at = datetime.now()  # noqa: DTZ005
+        job.finished_at = datetime.now()
         self.store.save_job(job)
         self._emit_finished(job)
         self._lifecycle(

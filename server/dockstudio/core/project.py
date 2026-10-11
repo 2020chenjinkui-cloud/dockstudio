@@ -71,7 +71,7 @@ class ProjectStore:
             id=project_id,
             name=name,
             path=str(project_dir),
-            created_at=datetime.now(),  # noqa: DTZ005
+            created_at=datetime.now(),
         )
         data = self._load_registry()
         data[project_id] = project.model_dump(mode="json")
@@ -141,7 +141,7 @@ class ProjectStore:
             project_id=project_id,
             batch_id=batch_id,
             request=request,
-            created_at=datetime.now(),  # noqa: DTZ005
+            created_at=datetime.now(),
         )
         job_dir = self.job_dir(project_id, job_id)
         job_dir.mkdir(parents=True, exist_ok=True)
@@ -194,7 +194,7 @@ class ProjectStore:
                 job.status = JobStatus.interrupted
                 job.progress.message = "服务重启打断"
                 if job.finished_at is None:
-                    job.finished_at = datetime.now()  # noqa: DTZ005
+                    job.finished_at = datetime.now()
                 self.save_job(job)
                 count += 1
                 log.info("job %s marked interrupted after restart", job.id)

@@ -36,7 +36,7 @@ def _gen(tmp_path: Path, pose_analyses=None, **kwargs) -> str:
     pose = tmp_path / "pose_1.sdf"
     pose.write_text("p\n  DockStudio\n\n  0  0  0\nM  END\n$$$$\n", encoding="utf-8")
     return generate_report(
-        project=Project(id="p", name="项目甲", path="/tmp", created_at=datetime.now()),  # noqa: DTZ005
+        project=Project(id="p", name="项目甲", path="/tmp", created_at=datetime.now()),
         request=DockJobRequest(
             receptor_id="r", ligand_id="l", box=Box(center=(0, 0, 0), size=(1, 1, 1))
         ),

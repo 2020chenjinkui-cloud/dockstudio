@@ -547,7 +547,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 id=job.project_id,
                 name="（已删除项目）",
                 path=str(store.job_dir(job.project_id, job.id).parent.parent),
-                created_at=datetime.now(),  # noqa: DTZ005
+                created_at=datetime.now(),
             )
         report_html = generate_report(
             project=project,
@@ -658,7 +658,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             id=uuid.uuid4().hex[:8],
             job_id=job.id,
             pose_indices=pose_indices,
-            created_at=datetime.now(),  # noqa: DTZ005
+            created_at=datetime.now(),
             msa_server_used=body.use_msa_server,
         )
         rescore.submit(task, job)

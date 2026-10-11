@@ -217,7 +217,7 @@ def test_run_task_with_mock_boltz(settings, monkeypatch) -> None:
         id="task001",
         job_id=job.id,
         pose_indices=[1, 2],
-        created_at=datetime.now(),  # noqa: DTZ005
+        created_at=datetime.now(),
     )
     runner._save(task, job)
     runner._run(task, job)
@@ -248,7 +248,7 @@ def test_mark_interrupted(settings) -> None:
     registry = PrepareRegistry(settings)
     job = _mk_job(store, registry)
     runner = RescoreRunner(store, settings)
-    task = AiRescoreTask(id="taskrun", job_id=job.id, pose_indices=[1], created_at=datetime.now())  # noqa: DTZ005
+    task = AiRescoreTask(id="taskrun", job_id=job.id, pose_indices=[1], created_at=datetime.now())
     runner._save(task, job)
     task.status = JobStatus.running
     runner._save(task, job)

@@ -264,7 +264,7 @@ class RescoreRunner:
                 continue
             if task.status in (JobStatus.queued, JobStatus.running):
                 task.status = JobStatus.interrupted
-                task.finished_at = task.finished_at or datetime.now()  # noqa: DTZ005
+                task.finished_at = task.finished_at or datetime.now()
                 tmp = path.with_suffix(".tmp")
                 tmp.write_text(task.model_dump_json(indent=2), encoding="utf-8")
                 tmp.replace(path)
@@ -378,7 +378,7 @@ class RescoreRunner:
         for i, pose_index in enumerate(task.pose_indices):
             if task.id in self._cancel_requested:
                 task.status = JobStatus.canceled
-                task.finished_at = datetime.now()  # noqa: DTZ005
+                task.finished_at = datetime.now()
                 self._save(task, job)
                 return
             task.progress.stage = "scoring"
@@ -409,7 +409,7 @@ class RescoreRunner:
             task.progress.stage = "done"
             task.progress.percent = 100.0
             task.progress.message = "完成"
-        task.finished_at = datetime.now()  # noqa: DTZ005
+        task.finished_at = datetime.now()
         self._save(task, job)
         self._lifecycle(
             job,

@@ -29,7 +29,7 @@ dev = [
     # PyPI 轮子缺 Windows 与 macOS-arm64，装上反而破坏 CI。
     "pytest>=8.0",
     "httpx>=0.27",
-    "ruff>=0.4",
+    "ruff>=0.4,<0.17",
     "mypy>=1.9",
 ]
 
@@ -46,6 +46,11 @@ dockstudio = ["demo_data/*.pdb", "demo_data/*.smi", "demo_data/*.txt"]
 [tool.ruff]
 line-length = 100
 target-version = "py310"
+
+[tool.ruff.lint]
+# 项目策略：桌面单机应用，时间戳一律用本地朴素时间（datetime.now()），
+# 事件审计场景下 ISO 时间由 events.py 显式 UTC 化处理。
+ignore = ["DTZ005"]
 
 [tool.ruff.lint.per-file-ignores]
 # frozen groundwork file, kept verbatim per project constraint

@@ -72,7 +72,7 @@ class PrepareRegistry:
 
 def new_run_dir(settings: Settings) -> Path:
     """Create runs/<timestamp>_<8-hex>/ for one docking job."""
-    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")  # noqa: DTZ005  # local time for humans
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     for _ in range(5):
         run_dir = settings.runs_dir / f"{stamp}_{uuid.uuid4().hex[:8]}"
         try:

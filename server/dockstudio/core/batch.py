@@ -63,7 +63,7 @@ class BatchStore:
             queued=len(req.ligand_ids),
             receptor_id=req.receptor_id,
             engine=req.engine,
-            created_at=datetime.now(),  # noqa: DTZ005
+            created_at=datetime.now(),
         )
         data = self._load()
         data[batch_id] = {
