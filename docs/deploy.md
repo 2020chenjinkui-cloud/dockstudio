@@ -35,6 +35,40 @@ gnina 与 Uni-Dock 仅支持 Linux + NVIDIA GPU。`docker-compose --profile gpu 
 
 建议 gnina 的容器启动方式：以 `dptechnology/unidock`（NGC CUDA 12.9）或 `nvidia/cuda:12.8.1-cudnn-runtime-*` 为基础镜像 + 上述 cuDNN 轮子库路径。
 
+### gnina 依赖库完整清单（DockStudio 适配器路径实测，2026-10-11）
+
+`gnina.cuda12.8.static` *并非*完全静态——在 python-slim 类精简环境按依赖逐层补齐的顺序实测如下，
+**全部缺一不可**（后 3 个是 ldd 不可见的运行时 dlopen/JIT 依赖，漏了报 `c10::DynamicLibraryError` 或 nvrtc 编译失败）：
+
+```
+libcudnn.so.9  libcudart.so.12  libcusparse.so.12  libcufft.so.11
+libcublas.so.12  libcublasLt.so.12  libcusolver.so.11  libnvJitLink.so.12
+libnvrtc.so.12  libnvrtc-builtins.so.12[.alt]
+```
+
+获取方式：前 8 个从任一 NGC CUDA 12.x 容器（如 `dptechnology/unidock`）的
+`/usr/local/cuda*/lib64` 拷贝；cudnn 从 PyPI 的 `nvidia_cudnn_cu12` 轮子解压；
+然后：
+
+```bash
+export LD_LIBRARY_PATH=/path/cudalib:/path/cudnn/lib  # 两个目录拼一起
+export DOCKSTUDIO_GNINA=/path/gnina
+docker run --gpus all ...  # 或宿主机直跑
+```
+
+DockStudio 容器实测命令：
+
+```bash
+docker run -d --gpus all -p 8000:8000 \
+  -v /path/engines:/eng \
+  -e DOCKSTUDIO_GNINA=/eng/gnina \
+  -e LD_LIBRARY_PATH=/eng/cudalib:/eng/cudnn/lib \
+  dockstudio
+# /api/engines 中 gnina available=true；POST /api/dock {"engine":"gnina", ...} 实测出 pose + CNN 重打分
+```
+
+注意：DockParams 的 `energy_range` 对 gnina 无效（gnina CLI 无此参数，适配器已自动剔除）。
+
 <a id="wsl2"></a>
 ## Windows 用户：WSL2 跑 GPU 引擎
 
