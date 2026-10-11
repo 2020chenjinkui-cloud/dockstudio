@@ -11,8 +11,10 @@ dependencies = [
     "fastapi>=0.110",
     "uvicorn[standard]>=0.29",
     "pydantic>=2.6",
-    "rdkit>=2024.3",
-    "meeko>=0.5",
+    # 科学复现：计算核心依赖上界锁定。ETKDG 构象生成结果随 rdkit 版本漂移
+    # （2026.03→2026.9 实测导致 vina 姿态聚类数变化），新版本需金标准回归验证后再放开
+    "rdkit>=2024.3,<2026.4",
+    "meeko>=0.5,<0.9",
     "scipy>=1.11",
     "gemmi>=0.6",
     "openbabel>=3.2.0,<4",  # 官方轮子（不要 openbabel-wheel：同名包共存会导致插件路径Frankestein混乱）
