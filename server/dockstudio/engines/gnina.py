@@ -103,5 +103,21 @@ class GninaEngine(VinaEngine):
             return False, reason
         return True, None
 
+    def _build_cmd(
+        self,
+        binary: str,
+        box,
+        params,
+        receptor_name: str,
+        ligand_name: str,
+        out_name: str,
+    ) -> list[str]:
+        """gnina CLI 不含 --energy_range（vina 专有），从继承的命令里剔除。"""
+        cmd = super()._build_cmd(binary, box, params, receptor_name, ligand_name, out_name)
+        if "--energy_range" in cmd:
+            i = cmd.index("--energy_range")
+            del cmd[i : i + 2]
+        return cmd
+
     def _parse_poses(self, out_path: Path, run_log: str) -> list[Pose]:
         return parse_gnina_out(out_path, run_log)

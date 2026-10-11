@@ -59,6 +59,19 @@ def test_unidock_cmd_mapping() -> None:
     assert cmd3[cmd3.index("--search_mode") + 1] == "detail"
 
 
+def test_gnina_cmd_excludes_energy_range() -> None:
+    """gnina CLI 不支持 --energy_range（vina 专有），适配器必须剔除。"""
+    from dockstudio.engines.gnina import GninaEngine
+
+    eng = GninaEngine()
+    box = Box(center=(1, 2, 3), size=(20, 20, 20))
+    cmd = eng._build_cmd(
+        "gnina", box, DockParams(exhaustiveness=8, energy_range=3.0), "r", "l", "o"
+    )
+    assert "--energy_range" not in cmd
+    assert cmd[cmd.index("--exhaustiveness") + 1] == "8"
+
+
 GNINA_OUT = textwrap.dedent(
     """\
     MODEL 1
