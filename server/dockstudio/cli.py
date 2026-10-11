@@ -67,12 +67,54 @@ def _cmd_demo() -> int:
     return 0
 
 
+def _cmd_audit(job_id: str) -> int:
+    """Print the audit Markdown chain for one job (scans all projects)."""
+    import json
+
+    from .analysis.audit import build_audit_markdown
+    from .config import get_settings
+    from .core.events import EventLog
+    from .core.project import ProjectStore
+
+    settings = get_settings()
+    store = ProjectStore(settings)
+    job = store.find_job(job_id)
+    if job is None:
+        print(
+            f"未找到任务 {job_id}：请确认 job_id 来自 /api/jobs 或项目目录，"
+            f"当前 data_dir={settings.data_dir}",
+            file=sys.stderr,
+        )
+        return 2
+    events = [
+        e
+        for e in EventLog(store.root / job.project_id).read()
+        if (e.get("subject") or {}).get("id") in (job.id, job.project_id)
+    ]
+    sidecar = store.job_dir(job.project_id, job.id) / "inputs.sha256.json"
+    input_hashes: dict = {}
+    if sidecar.is_file():
+        try:
+            input_hashes = json.loads(sidecar.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            input_hashes = {}
+    project = store.get(job.project_id)
+    print(
+        build_audit_markdown(
+            job, events, input_hashes, project_name=(project.name if project else job.project_id)
+        )
+    )
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(prog="dockstudio", description="DockStudio backend CLI")
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("serve", help="start the uvicorn server")
     sub.add_parser("engines", help="list engines and availability")
     sub.add_parser("demo", help="run a full demo docking on the bundled 1HSG fixture")
+    audit_parser = sub.add_parser("audit", help="print the audit markdown for a job")
+    audit_parser.add_argument("job_id", help="job id (8-hex, from /api/jobs)")
     args = parser.parse_args()
 
     if args.command == "serve":
@@ -84,6 +126,8 @@ def main() -> int:
         return _cmd_engines()
     if args.command == "demo":
         return _cmd_demo()
+    if args.command == "audit":
+        return _cmd_audit(args.job_id)
     return 2
 
 

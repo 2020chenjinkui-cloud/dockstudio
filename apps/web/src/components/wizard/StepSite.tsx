@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { fetchFile, predictPockets } from '../../api';
 import { useI18n } from '../../i18n';
-import MolViewer from '../../MolViewer';
+import MolViewer from '../../MolViewerLazy';
 import type { DockBox, Pocket, PreparedReceptor } from '../../types';
 import Tooltip from '../Tooltip';
 

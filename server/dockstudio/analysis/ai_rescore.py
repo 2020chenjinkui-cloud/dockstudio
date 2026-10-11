@@ -201,7 +201,9 @@ def _error_hint(stderr: str) -> str:
         or "<no output>"
     )
     hint = ""
-    if re.search(r"huggingface|hf.co|HF_ENDPOINT|Connection|timeout|SSLError", stderr, re.IGNORECASE):
+    if re.search(
+        r"huggingface|hf.co|HF_ENDPOINT|Connection|timeout|SSLError", stderr, re.IGNORECASE
+    ):
         hint = "（疑似 Hugging Face 权重下载失败：请设置 HF_ENDPOINT=https://hf-mirror.com 后重试）"
     return f"{tail}{hint}"
 
@@ -409,6 +411,27 @@ class RescoreRunner:
             task.progress.message = "完成"
         task.finished_at = datetime.now()  # noqa: DTZ005
         self._save(task, job)
+        self._lifecycle(
+            job,
+            task,
+            "rescore.completed" if task.status == JobStatus.completed else "rescore.canceled",
+            {
+                "n_results": len(task.results),
+                "results": [r.model_dump(mode="json") for r in task.results]
+                if task.status == JobStatus.completed
+                else [],
+            },
+        )
+
+    def _lifecycle(self, job: Job, task: AiRescoreTask, action: str, payload: dict) -> None:
+        try:
+            from ..core.events import EventLog
+
+            EventLog(self.store.root / job.project_id).emit(
+                action, "rescore", task.id, payload, actor="system"
+            )
+        except Exception as exc:  # noqa: BLE001
+            log.warning("rescore event emit failed (%s): %s", action, exc)
 
     def _write_inputs(self, job: Job, task_dir: Path) -> tuple[Path, str, str]:
         from ..core.orchestrator import get_registry

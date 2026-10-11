@@ -4,7 +4,7 @@ import BoxParamsCard from './components/BoxParamsCard';
 import CliCard from './components/CliCard';
 import LigandCard from './components/LigandCard';
 import ReceptorCard from './components/ReceptorCard';
-import MolViewer, { type ViewerPose } from './MolViewer';
+import MolViewer, { type ViewerPose } from './MolViewerLazy';
 import type {
   DockBox,
   DockParams,

@@ -33,6 +33,7 @@ from ..analysis.interactions import analyze_job_poses
 from ..analysis.report import generate_report
 from ..config import Settings, get_settings
 from ..core.batch import BatchStore
+from ..core.events import EventLog, env_fingerprint, sha256_file
 from ..core.orchestrator import PrepareRegistry, new_run_dir
 from ..core.project import ProjectStore
 from ..core.queue import EventBus, JobRunner
@@ -130,7 +131,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     if interrupted:
         log.info("marked %d stale jobs interrupted", interrupted)
     bus = EventBus()
-    runner = JobRunner(store, registry, bus)
+
+    def _runner_emitter(job: Job, action: str, payload: dict) -> None:
+        EventLog(store.root / job.project_id).emit(action, "job", job.id, payload, actor="system")
+
+    runner = JobRunner(store, registry, bus, event_emitter=_runner_emitter)
     batches = BatchStore(settings, store)
     from ..analysis.ai_rescore import RescoreRunner
 
@@ -152,6 +157,39 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.store = store
     app.state.runner = runner
     app.state.rescore = rescore
+
+    def events_for(project_id: str) -> EventLog:
+        return EventLog(store.root / project_id)
+
+    def _input_hashes(job: Job) -> dict:
+        receptor = registry.receptors.get(job.request.receptor_id)
+        ligand = registry.ligands.get(job.request.ligand_id)
+        out: dict[str, str] = {}
+        for name, entry in (("receptor", receptor), ("ligand", ligand)):
+            if entry is None:
+                continue
+            path = Path(getattr(entry, "pdbqt_path", ""))
+            if not path.is_file():
+                path = Path(getattr(entry, "original_path", "") or "")
+            if path.is_file():
+                out[name] = sha256_file(path)
+        return out
+
+    def _save_input_hashes(job: Job) -> dict:
+        hashes = _input_hashes(job)
+        job_dir = store.job_dir(job.project_id, job.id)
+        job_dir.mkdir(parents=True, exist_ok=True)
+        (job_dir / "inputs.sha256.json").write_text(json.dumps(hashes, indent=2), encoding="utf-8")
+        return hashes
+
+    def _load_input_hashes(job: Job) -> dict:
+        sidecar = store.job_dir(job.project_id, job.id) / "inputs.sha256.json"
+        if sidecar.is_file():
+            try:
+                return json.loads(sidecar.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                return {}
+        return {}
 
     app.add_middleware(
         CORSMiddleware,
@@ -207,6 +245,20 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             content, file.filename or "receptor.pdb", registry.receptors_dir
         )
         registry.add_receptor(receptor)
+        events_for("_prepared").emit(
+            "receptor.prepared",
+            "receptor",
+            receptor.id,
+            {
+                "filename": file.filename,
+                "original_sha256": sha256_file(Path(receptor.original_path)),
+                "n_chains": len(receptor.chains),
+                "chains": receptor.chains,
+                "n_cocrystals": len(receptor.cocrystal_ligands),
+                "cocrystals": [c.model_dump(mode="json") for c in receptor.cocrystal_ligands],
+                "warnings": receptor.warnings,
+            },
+        )
         return receptor
 
     @app.post("/api/prepare/ligand")
@@ -234,6 +286,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         else:
             ligand = prepare_ligand_from_smiles(smiles or "", name, registry.ligands_dir)
         registry.add_ligand(ligand)
+        events_for("_prepared").emit(
+            "ligand.prepared",
+            "ligand",
+            ligand.id,
+            {
+                "source": ligand.source,
+                "smiles": ligand.smiles,
+                "n_rotatable": ligand.n_rotatable_bonds,
+                "name": ligand.name,
+            },
+        )
         return ligand
 
     @app.post("/api/dock")
@@ -299,7 +362,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.post("/api/projects", status_code=201)
     async def create_project(body: CreateProjectRequest) -> dict:
-        return store.create(body.name).model_dump(mode="json")
+        project = store.create(body.name)
+        events_for(project.id).emit(
+            "project.create", "project", project.id, {"name": project.name}, actor="user"
+        )
+        return project.model_dump(mode="json")
 
     @app.get("/api/projects")
     async def list_projects() -> list[dict]:
@@ -314,8 +381,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.delete("/api/projects/{pid}", status_code=204)
     async def delete_project(pid: str) -> Response:
+        project = store.get(pid)
         if not store.delete(pid):
             return _not_found("project")
+        # project dir moved to .trash-*; record the event in the trash copy too
+        trash = store.root / f".trash-{pid}"
+        EventLog(trash if trash.is_dir() else store.root / pid).emit(
+            "project.delete",
+            "project",
+            pid,
+            {"name": project.name if project else None},
+        )
         return Response(status_code=204)
 
     @app.get("/api/prepare/receptors")
@@ -333,7 +409,25 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if store.get(pid) is None:
             return _not_found("project")
         job = store.new_job(pid, body)
+        job.env = env_fingerprint()
+        hashes = _save_input_hashes(job)
+        store.save_job(job)
         runner.submit(job)
+        events_for(pid).emit(
+            "job.created",
+            "job",
+            job.id,
+            {
+                "engine": body.engine,
+                "receptor_id": body.receptor_id,
+                "ligand_id": body.ligand_id,
+                "box": body.box.model_dump(),
+                "params": body.params.model_dump(),
+                "batch_id": job.batch_id,
+                "env": job.env.model_dump(),
+                "input_sha256": hashes,
+            },
+        )
         return {"job_id": job.id}
 
     @app.get("/api/jobs/{jid}")
@@ -568,6 +662,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             msa_server_used=body.use_msa_server,
         )
         rescore.submit(task, job)
+        events_for(job.project_id).emit(
+            "rescore.created",
+            "rescore",
+            task.id,
+            {
+                "job_id": job.id,
+                "pose_indices": pose_indices,
+                "msa_server_used": task.msa_server_used,
+            },
+        )
         return {"task_id": task.id}
 
     @app.get("/api/jobs/{jid}/rescore")
@@ -594,6 +698,154 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             return _not_found("rescore task job")
         result = rescore.cancel(task_id, job)
         return result if result is not None else task
+
+    # ------------------------------------------------------------- M4: audit & provenance (2.0)
+
+    @app.get("/api/projects/{pid}/events.jsonl", response_class=PlainTextResponse)
+    async def project_events(pid: str, since: str | None = Query(default=None)):
+        if store.get(pid) is None:
+            return _not_found("project")
+        events = list(events_for(pid).read(since=since))
+        body = "\n".join(json.dumps(e, ensure_ascii=False) for e in events)
+        return PlainTextResponse(body + ("\n" if body else ""), media_type="text/plain")
+
+    @app.get("/api/jobs/{jid}/audit.zip")
+    async def job_audit_zip(jid: str):
+        from ..analysis.audit import build_audit_zip
+
+        job = runner.get_job(jid)
+        if job is None:
+            return _not_found("job")
+        project = store.get(job.project_id)
+        events = [
+            e
+            for e in events_for(job.project_id).read()
+            if (e.get("subject") or {}).get("id") in (job.id, job.project_id)
+            or jid in json.dumps(e.get("payload", {}))
+        ]
+        input_hashes = _load_input_hashes(job) or _input_hashes(job)
+        zip_path = store.job_dir(job.project_id, job.id) / "audit.zip"
+        build_audit_zip(
+            job,
+            store.root / job.project_id,
+            events,
+            zip_path,
+            project_name=(project.name if project else job.project_id),
+            input_hashes=input_hashes,
+        )
+        return Response(
+            zip_path.read_bytes(),
+            media_type="application/zip",
+            headers={"Content-Disposition": f'attachment; filename="audit-{jid}.zip"'},
+        )
+
+    # ------------------------------------------------------------- M4: demo + co-crystal (2.0)
+
+    _DEMO_FLAG = "_demo_loaded.json"
+
+    @app.get("/api/demo/example")
+    async def demo_example():
+        flag_path = registry.receptors_dir / _DEMO_FLAG
+        demo_dir = Path(__file__).resolve().parent.parent / "demo_data"
+        note = (
+            "示例数据：PDB 1HSG（HIV-1 蛋白酶 + 共晶配体 MK1），"
+            "配体为 indinavir（SMILES 来自 PDB 共晶配体）；盒子取 MK1 质心 22.5Å 立方。"
+        )
+        flag = None
+        if flag_path.is_file():
+            try:
+                flag = json.loads(flag_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                flag = None
+        if (
+            flag
+            and flag.get("receptor_id") in registry.receptors
+            and flag.get("ligand_id") in registry.ligands
+        ):
+            receptor = registry.receptors[flag["receptor_id"]]
+            ligand = registry.ligands[flag["ligand_id"]]
+        else:
+            receptor = prepare_receptor(
+                (demo_dir / "1HSG.pdb").read_bytes(), "1HSG.pdb", registry.receptors_dir
+            )
+            registry.add_receptor(receptor)
+            smiles_text = (demo_dir / "indinavir_smiles.txt").read_text(encoding="utf-8").strip()
+            ligand = prepare_ligand_from_smiles(smiles_text, "indinavir", registry.ligands_dir)
+            registry.add_ligand(ligand)
+            flag = {"receptor_id": receptor.id, "ligand_id": ligand.id}
+            flag_path.write_text(json.dumps(flag), encoding="utf-8")
+        mk1 = next((c for c in receptor.cocrystal_ligands if c.resname == "MK1"), None)
+        if mk1 is None:
+            raise PreparationError("示例受体未识别到共晶配体 MK1")
+        from ..models import Box, DemoExample
+
+        return DemoExample(
+            receptor=receptor,
+            ligand=ligand,
+            box=Box(center=mk1.center, size=(22.5, 22.5, 22.5)),
+            note=note,
+        )
+
+    @app.get("/api/demo/library")
+    async def demo_library() -> dict:
+        demo_path = Path(__file__).resolve().parent.parent / "demo_data" / "demo_library.smi"
+        items = []
+        for line in demo_path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            parts = line.split(None, 1)
+            items.append(
+                {"name": parts[1].strip() if len(parts) > 1 else parts[0], "smiles": parts[0]}
+            )
+        return {"name": "demo-library", "items": items}
+
+    def _job_cocrystal_meta(job: Job) -> list[dict]:
+        receptor = registry.receptors.get(job.request.receptor_id)
+        if receptor is None:
+            return []
+        meta_path = Path(receptor.pdbqt_path).parent / "cocrystals.json"
+        if not meta_path.is_file():
+            return []
+        try:
+            return json.loads(meta_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return []
+
+    @app.get("/api/jobs/{jid}/crystal_ligand", response_class=PlainTextResponse)
+    async def crystal_ligand(jid: str):
+        job = runner.get_job(jid)
+        if job is None:
+            return _not_found("job")
+        meta = _job_cocrystal_meta(job)
+        if not meta:
+            return _error(404, "该受体没有可用的共晶配体")
+        sdf_path = Path(meta[0]["sdf_path"])
+        if not sdf_path.is_file():
+            return _error(404, "共晶配体 SDF 缺失")
+        return PlainTextResponse(sdf_path.read_text(encoding="utf-8", errors="replace"))
+
+    @app.get("/api/jobs/{jid}/crystal_rmsd")
+    async def crystal_rmsd(jid: str, pose_index: int = Query(default=1, ge=1)):
+        from ..models import CrystalRmsd
+
+        job = runner.get_job(jid)
+        if job is None:
+            return _not_found("job")
+        pose_paths = _job_pose_paths(job)
+        if not (1 <= pose_index <= len(pose_paths)):
+            return _error(404, f"pose {pose_index} 不存在")
+        meta = _job_cocrystal_meta(job)
+        if not meta:
+            return CrystalRmsd(pose_index=pose_index, rmsd=None, reference=None)
+        reference = f"{meta[0]['resname']}:{meta[0]['chain']}"
+        sdf_path = Path(meta[0]["sdf_path"])
+        if not sdf_path.is_file():
+            return CrystalRmsd(pose_index=pose_index, rmsd=None, reference=reference)
+        from ..analysis.crystal import heavy_atom_rmsd
+
+        rmsd = heavy_atom_rmsd(sdf_path, pose_paths[pose_index - 1])
+        return CrystalRmsd(pose_index=pose_index, rmsd=rmsd, reference=reference)
 
     # ------------------------------------------------------------- M1: WebSocket
 
@@ -662,6 +914,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             base = registry.receptors.get(base.parent_id, base)
         variant = prepare_flex_variant(base, body.flex_residues, registry.receptors_dir)
         registry.add_receptor(variant)
+        events_for("_prepared").emit(
+            "receptor.flex_variant",
+            "receptor",
+            variant.id,
+            {"parent_id": rid, "flex_residues": body.flex_residues},
+        )
         return variant
 
     # ------------------------------------------------------------- M2: library
@@ -676,7 +934,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         content = await _read_upload(file)
         if not content.strip():
             raise PreparationError("库文件为空。")
-        return prepare_library(content, file.filename or "library.smi", registry, name)
+        lib = prepare_library(content, file.filename or "library.smi", registry, name)
+        events_for("_prepared").emit(
+            "library.prepared",
+            "library",
+            lib.id,
+            {
+                "name": lib.name,
+                "n_ligands": len(lib.ligand_ids),
+                "n_failed": len(lib.failed),
+                "filename": file.filename,
+            },
+        )
+        return lib
 
     # ------------------------------------------------------------- M2: batches
 
@@ -694,7 +964,22 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         summary = batches.create(pid, body)
         for ligand_id in body.ligand_ids:
             job = store.new_job(pid, job_request_from_batch(body, ligand_id), batch_id=summary.id)
+            job.env = env_fingerprint()
+            _save_input_hashes(job)
+            store.save_job(job)
             runner.submit(job)
+        events_for(pid).emit(
+            "batch.created",
+            "batch",
+            summary.id,
+            {
+                "name": summary.name,
+                "total": summary.total,
+                "receptor_id": body.receptor_id,
+                "engine": body.engine,
+                "ligand_ids": body.ligand_ids,
+            },
+        )
         return {"batch_id": summary.id}
 
     def _batch_summary_or_404(bid: str):
@@ -718,6 +1003,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         for job in batches.jobs_of(bid):
             if not job.is_terminal:
                 runner.cancel(job.id)
+        meta = batches.get_meta(bid) or {}
+        events_for(meta.get("project_id", "_prepared")).emit("batch.canceled", "batch", bid, {})
         return _batch_summary_or_404(bid)
 
     @app.get("/api/batches/{bid}/results")

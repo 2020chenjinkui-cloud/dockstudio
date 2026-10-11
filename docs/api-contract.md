@@ -151,3 +151,39 @@ Body = `AiRescoreRequest {pose_indices?: int[], use_msa_server?: true}` → 202 
 ## POST /api/rescore/{task_id}/cancel → `AiRescoreTask`（尽力）
 
 结果展示：pose 表新增 `log_ic50` 与 `binder_probability` 两列（有复核结果时），与 vina affinity 并排。
+
+---
+
+# v0.6 增量（2.0：溯源 + 演示）
+
+## 溯源
+
+### GET /api/projects/{pid}/events.jsonl
+→ `text/plain`：项目全部事件流，每行 JSON：
+`{ts: iso8601, actor: "user"|"system", action: 字符串, subject: {kind, id}, payload: {...}}`
+动作全集见 docs/audit-schema.md（project.* / receptor.* / ligand.* / job.* / batch.* / rescore.*）。
+
+### GET /api/jobs/{jid}/audit.zip
+→ zip 文件：snapshot(job.json 含 env 指纹与输入 SHA256) + 该 job 相关 events + 引擎完整 log + 输入输出文件 + report.md（事理链 Markdown，可直接给 agent 审查）。
+
+### CLI
+`dockstudio audit <job_id>`：stdout 打印一份 Markdown 事理链（输入哈希→环境指纹→盒/参数→引擎→姿态打分→事件序列）。
+
+## 演示与共晶参考
+
+### GET /api/demo/example
+→ `DemoExample {receptor, ligand, box, note}`：幂等（第二次复用既有 prepared 记录）。
+即内置 1HSG 受体 + 茚地那韦配体 ready-to-run。
+
+### GET /api/demo/library
+→ `{name, items: [{name, smiles}]}`：内置演示小分子库（10 个常见药物），
+前端据此调 POST /api/prepare/library 即可完成批量演示。
+
+### GET /api/jobs/{jid}/crystal_ligand
+→ SDF 纯文本：该 job 受体的共晶配体构象（受体准备时抽取缓存）；无共晶 404。
+
+### GET /api/jobs/{jid}/crystal_rmsd?pose_index=N
+→ `CrystalRmsd {pose_index, rmsd, reference}`：与共晶配体的重原子 RMSD（RDKit 对齐）；无共晶配体或 pose 缺失 → rmsd=null。
+
+## 其他
+- Job 模型新增 `env`（EnvFingerprint：python/rdkit/meeko/openbabel/platform 版本）。

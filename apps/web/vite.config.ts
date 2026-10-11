@@ -13,4 +13,14 @@ export default defineConfig({
       },
     },
   },
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          '3dmol': ['3dmol'],
+          react: ['react', 'react-dom'],
+        },
+      },
+    },
+  },
 });

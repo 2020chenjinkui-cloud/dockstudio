@@ -11,6 +11,9 @@ import type {
   CreateBatchResponse,
   CreateRescoreResponse,
   CreateJobResponse,
+  CrystalRmsd,
+  DemoExample,
+  DemoLibrary,
   DockRequest,
   DockResult,
   EngineManifest,
@@ -455,4 +458,35 @@ export async function getRescoreTask(taskId: string): Promise<AiRescoreTask> {
 
 export async function cancelRescoreTask(taskId: string): Promise<AiRescoreTask> {
   return req<AiRescoreTask>(`/api/rescore/${taskId}/cancel`, { method: 'POST' });
+}
+
+// ---- 演示与共晶参考 ----
+
+export async function getDemoExample(): Promise<DemoExample> {
+  return req<DemoExample>('/api/demo/example');
+}
+
+export async function getDemoLibrary(): Promise<DemoLibrary> {
+  return req<DemoLibrary>('/api/demo/library');
+}
+
+export async function fetchCrystalLigand(jid: string): Promise<string | null> {
+  const res = await fetch(`/api/jobs/${jid}/crystal_ligand`);
+  if (res.status === 404) return null;
+  if (!res.ok) return null;
+  return res.text();
+}
+
+export async function getCrystalRmsd(jid: string, poseIndex: number): Promise<CrystalRmsd> {
+  return req<CrystalRmsd>(`/api/jobs/${jid}/crystal_rmsd?pose_index=${poseIndex}`);
+}
+
+// ---- 溯源 ----
+
+export function auditZipUrl(jid: string): string {
+  return `/api/jobs/${jid}/audit.zip`;
+}
+
+export function projectEventsUrl(pid: string): string {
+  return `/api/projects/${pid}/events.jsonl`;
 }

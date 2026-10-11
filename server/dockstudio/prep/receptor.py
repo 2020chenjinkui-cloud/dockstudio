@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 import shutil
 import subprocess
@@ -230,6 +231,36 @@ def prepare_receptor(content: bytes, filename: str, out_dir: Path) -> PreparedRe
                 ),
             )
         )
+
+    # Extract each candidate's conformation as SDF for the co-crystal reference;
+    # the sidecar cocrystals.json keeps the mapping (model stays unchanged).
+    from rdkit import Chem as _Chem
+
+    cocrystal_meta: list[dict] = []
+    for (resname, chain, _, _), group in sorted(het_groups.items()):
+        if resname in _EXCLUDE:
+            continue
+        heavy = [r for r in group if not r.is_hydrogen]
+        if len(heavy) < 5:
+            continue
+        sdf_name = f"cocrystal_{resname}_{chain}.sdf"
+        sdf_path = rec_dir / sdf_name
+        block = "\n".join(r.line for r in group) + "\nEND\n"
+        mol = _Chem.MolFromPDBBlock(block, sanitize=False, removeHs=False)
+        try:
+            if mol is not None and mol.GetNumAtoms() > 0:
+                sdf_path.write_text(
+                    _Chem.MolToMolBlock(mol) + "\n$$$$\n", encoding="utf-8", newline="\n"
+                )
+                cocrystal_meta.append(
+                    {"resname": resname, "chain": chain, "sdf_path": str(sdf_path)}
+                )
+        except Exception as exc:  # noqa: BLE001
+            warnings.append(f"共晶配体 {resname}:{chain} SDF 抽取失败: {exc}")
+            sdf_path.unlink(missing_ok=True)
+    (rec_dir / "cocrystals.json").write_text(
+        json.dumps(cocrystal_meta, indent=2, ensure_ascii=False), encoding="utf-8"
+    )
 
     clean_lines: Iterable[str] = (
         r.line for r in records if r.record == "ATOM" or r.resname not in _WATERS

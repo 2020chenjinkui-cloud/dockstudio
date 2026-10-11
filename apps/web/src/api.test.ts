@@ -265,3 +265,41 @@ describe('api v0.5', () => {
     expect(cancel[1].method).toBe('POST');
   });
 });
+
+describe('api v0.6', () => {
+  it('getDemoExample / getDemoLibrary 路径正确', async () => {
+    const spy = vi.fn().mockImplementation(() => Promise.resolve(jsonResponse({})));
+    vi.stubGlobal('fetch', spy);
+    const { getDemoExample, getDemoLibrary } = await import('./api');
+    await getDemoExample();
+    await getDemoLibrary();
+    const urls = spy.mock.calls.map((c) => (c as [string])[0]);
+    expect(urls).toEqual(['/api/demo/example', '/api/demo/library']);
+  });
+
+  it('fetchCrystalLigand 404 返回 null，成功返回文本', async () => {
+    const spy404 = vi.fn().mockResolvedValue(new Response('x', { status: 404 }));
+    vi.stubGlobal('fetch', spy404);
+    const { fetchCrystalLigand } = await import('./api');
+    expect(await fetchCrystalLigand('j1')).toBeNull();
+
+    const spyOk = vi.fn().mockResolvedValue(new Response('SDF-DATA', { status: 200 }));
+    vi.stubGlobal('fetch', spyOk);
+    expect(await fetchCrystalLigand('j1')).toBe('SDF-DATA');
+    const [url] = spyOk.mock.calls[0] as [string];
+    expect(url).toBe('/api/jobs/j1/crystal_ligand');
+  });
+
+  it('getCrystalRmsd 拼 pose_index；audit/events URL 正确', async () => {
+    const spy = vi
+      .fn()
+      .mockResolvedValue(jsonResponse({ pose_index: 2, rmsd: 1.4, reference: 'x' }));
+    vi.stubGlobal('fetch', spy);
+    const { getCrystalRmsd, auditZipUrl, projectEventsUrl } = await import('./api');
+    await getCrystalRmsd('j1', 2);
+    const [url] = spy.mock.calls[0] as [string];
+    expect(url).toBe('/api/jobs/j1/crystal_rmsd?pose_index=2');
+    expect(auditZipUrl('j1')).toBe('/api/jobs/j1/audit.zip');
+    expect(projectEventsUrl('p1')).toBe('/api/projects/p1/events.jsonl');
+  });
+});

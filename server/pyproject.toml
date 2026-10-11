@@ -40,6 +40,9 @@ dockstudio = "dockstudio.cli:main"
 [tool.setuptools.packages.find]
 include = ["dockstudio*"]
 
+[tool.setuptools.package-data]
+dockstudio = ["demo_data/*.pdb", "demo_data/*.smi", "demo_data/*.txt"]
+
 [tool.ruff]
 line-length = 100
 target-version = "py310"

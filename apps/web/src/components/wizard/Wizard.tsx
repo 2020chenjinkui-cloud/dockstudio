@@ -3,6 +3,7 @@ import { getBatch, getJob } from '../../api';
 import { useI18n } from '../../i18n';
 import type {
   BatchSummary,
+  DemoExample,
   DockBox,
   DockParams,
   EngineManifest,
@@ -58,6 +59,7 @@ interface WizardProps {
   engines: EngineManifest[];
   resumeJobId: string | null;
   resumeBatchId: string | null;
+  demo?: DemoExample | null;
   onResumeHandled: () => void;
   onOpenJob: (jobId: string) => void;
 }
@@ -67,6 +69,7 @@ export default function Wizard({
   engines,
   resumeJobId,
   resumeBatchId,
+  demo = null,
   onResumeHandled,
   onOpenJob,
 }: WizardProps) {
@@ -77,6 +80,19 @@ export default function Wizard({
   const [batchSummary, setBatchSummary] = useState<BatchSummary | null>(null);
   const [advanced, setAdvanced] = useState(false);
   const [resumeError, setResumeError] = useState<string | null>(null);
+  const [demoNote, setDemoNote] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!demo) return;
+    setData((d) => ({
+      ...d,
+      receptor: demo.receptor,
+      ligand: demo.ligand,
+      box: demo.box,
+    }));
+    setDemoNote(demo.note);
+    setStep(3);
+  }, [demo]);
 
   const patch = useCallback((p: Partial<WizardData>) => {
     setData((d) => ({ ...d, ...p }));
@@ -180,6 +196,14 @@ export default function Wizard({
         </li>
       </ol>
       {resumeError && <div className="banner">任务加载失败：{resumeError}</div>}
+      {demoNote && (
+        <div className="demo-note">
+          <span>{demoNote}</span>
+          <button className="link-btn" onClick={() => setDemoNote(null)}>
+            {t('bar.close')}
+          </button>
+        </div>
+      )}
       <section className="card wizard-card">
         {step === 1 && (
           <StepReceptor

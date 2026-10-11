@@ -1,7 +1,16 @@
 import { useEffect, useState } from 'react';
-import { listPreparedLigands, prepareLibrary, prepareLigand } from '../../api';
+import {
+  getDemoLibrary,
+  listPreparedLigands,
+  prepareLibrary,
+  prepareLigand,
+} from '../../api';
+import { demoLibraryToFile } from '../../demo';
 import { PARAM_HELP } from '../../helpText';
+import { useI18n } from '../../i18n';
+import { checkSmilesQuick, type SmilesQuickCheck } from '../../smiles';
 import type { PreparedLibrary, PreparedLigand } from '../../types';
+import FormatHint from '../FormatHint';
 import Tooltip from '../Tooltip';
 
 interface StepLigandProps {
@@ -37,9 +46,11 @@ function SingleLigand({
   ligand: PreparedLigand | null;
   onPrepared: (l: PreparedLigand) => void;
 }) {
+  const { t } = useI18n();
   const [tab, setTab] = useState<Mode>('file');
   const [file, setFile] = useState<File | null>(null);
   const [smiles, setSmiles] = useState('');
+  const [smilesCheck, setSmilesCheck] = useState<SmilesQuickCheck | null>(null);
   const [name, setName] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -74,6 +85,7 @@ function SingleLigand({
 
   return (
     <div className="step-body">
+      <FormatHint kind="ligand" />
       <div className="tabs">
         <button className={tab === 'file' ? 'active' : ''} onClick={() => setTab('file')}>
           上传文件
@@ -94,12 +106,20 @@ function SingleLigand({
               onChange={(e) => setFile(e.target.files?.[0] ?? null)}
             />
           ) : (
-            <input
-              type="text"
-              placeholder="例如：CC(=O)Oc1ccccc1C(=O)O"
-              value={smiles}
-              onChange={(e) => setSmiles(e.target.value)}
-            />
+            <>
+              <input
+                type="text"
+                placeholder="例如：CC(=O)Oc1ccccc1C(=O)O"
+                value={smiles}
+                onChange={(e) => setSmiles(e.target.value)}
+                onBlur={() => setSmilesCheck(checkSmilesQuick(smiles))}
+              />
+              {smilesCheck && (
+                <p className={`smiles-check smiles-${smilesCheck.verdict}`}>
+                  {t(smilesCheck.messageKey)}
+                </p>
+              )}
+            </>
           )}
           <div className="row">
             <input
@@ -162,10 +182,12 @@ function BatchLigands({
   batchLigandIds: string[];
   onBatchChange: (ids: string[]) => void;
 }) {
+  const { t } = useI18n();
   const [tab, setTab] = useState<BatchModeTab>('library-file');
   const [file, setFile] = useState<File | null>(null);
   const [libName, setLibName] = useState('');
   const [busy, setBusy] = useState(false);
+  const [demoBusy, setDemoBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [preparedLib, setPreparedLib] = useState<PreparedLibrary | null>(null);
   const [library, setLibrary] = useState<PreparedLigand[] | null>(null);
@@ -193,6 +215,23 @@ function BatchLigands({
     }
   };
 
+  const loadDemo = async () => {
+    setDemoBusy(true);
+    setError(null);
+    setPreparedLib(null);
+    try {
+      const demo = await getDemoLibrary();
+      const demoFile = demoLibraryToFile(demo.name, demo.items);
+      const lib = await prepareLibrary(demoFile, demo.name);
+      setPreparedLib(lib);
+      onBatchChange(lib.ligand_ids);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setDemoBusy(false);
+    }
+  };
+
   const toggle = (id: string, checked: boolean) => {
     onBatchChange(
       checked ? [...batchLigandIds, id] : batchLigandIds.filter((x) => x !== id),
@@ -201,6 +240,7 @@ function BatchLigands({
 
   return (
     <div className="step-body">
+      <FormatHint kind="library" />
       <div className="tabs">
         <button
           className={tab === 'library-file' ? 'active' : ''}
@@ -237,6 +277,9 @@ function BatchLigands({
               {busy ? '解析中…' : '上传并解析'}
             </button>
           </div>
+          <button className="chip" onClick={() => void loadDemo()} disabled={demoBusy}>
+            {demoBusy ? t('demo.libraryLoading') : t('demo.libraryLoad')}
+          </button>
           {preparedLib && (
             <div className="summary">
               <p>

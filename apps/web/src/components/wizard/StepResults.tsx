@@ -1,8 +1,11 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
+  auditZipUrl,
   diagramUrl,
+  fetchCrystalLigand,
   fetchFile,
   getAnalysis,
+  getCrystalRmsd,
   getJob,
   listPreparedReceptors,
   reportUrl,
@@ -10,11 +13,16 @@ import {
 import { DISCLAIMER } from '../../helpText';
 import { useI18n } from '../../i18n';
 import { interactionTypeLabel, parseResidue, poseCheckBadge } from '../../labels';
-import MolViewer, { type ResidueHighlight, type ViewerPose } from '../../MolViewer';
+import MolViewer, {
+  type MolViewerHandle,
+  type ResidueHighlight,
+  type ViewerPose,
+} from '../../MolViewerLazy';
 import { mergeRescoreResults } from '../../rescore';
 import type {
   AiRescoreResult,
   AiRescoreTask,
+  CrystalRmsd,
   Job,
   PoseAnalysis,
   PoseIssue,
@@ -22,6 +30,7 @@ import type {
 } from '../../types';
 import AiRescoreSection from '../AiRescoreSection';
 import CliCard from '../CliCard';
+import CrystalRmsdCell from '../CrystalRmsdCell';
 import ReportDialog from '../ReportDialog';
 
 interface StepResultsProps {
@@ -49,6 +58,9 @@ export default function StepResults({ jobId, job, onJobUpdate }: StepResultsProp
   const [diagramError, setDiagramError] = useState(false);
   const [reportOpen, setReportOpen] = useState(false);
   const [rescoreTasks, setRescoreTasks] = useState<AiRescoreTask[]>([]);
+  const [crystalSdf, setCrystalSdf] = useState<string | null>(null);
+  const [crystalMap, setCrystalMap] = useState<Record<number, CrystalRmsd>>({});
+  const viewerRef = useRef<MolViewerHandle>(null);
 
   const aiMap = useMemo(() => mergeRescoreResults(rescoreTasks), [rescoreTasks]);
 
@@ -114,6 +126,39 @@ export default function StepResults({ jobId, job, onJobUpdate }: StepResultsProp
       cancelled = true;
     };
   }, [job]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setCrystalSdf(null);
+    fetchCrystalLigand(jobId)
+      .then((text) => {
+        if (!cancelled) setCrystalSdf(text);
+      })
+      .catch(() => {
+        // 无共晶配体时静默
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [jobId]);
+
+  useEffect(() => {
+    if (!result) return;
+    let cancelled = false;
+    for (const pose of result.poses) {
+      getCrystalRmsd(jobId, pose.index)
+        .then((r) => {
+          if (cancelled) return;
+          setCrystalMap((m) => ({ ...m, [pose.index]: r }));
+        })
+        .catch(() => {
+          // 无共晶配体或 pose 缺失时该列显示 —
+        });
+    }
+    return () => {
+      cancelled = true;
+    };
+  }, [jobId, result]);
 
   useEffect(() => {
     if (!result) return;
@@ -208,6 +253,7 @@ export default function StepResults({ jobId, job, onJobUpdate }: StepResultsProp
                 <th title={t('ai.note.logIC50')}>{t('ai.th.logIC50')}</th>
                 <th title={t('ai.note.binder')}>{t('ai.th.binder')}</th>
                 <th>rmsd 区间</th>
+                <th title={t('crystal.note')}>{t('crystal.th')}</th>
                 <th>质检</th>
               </tr>
             </thead>
@@ -218,6 +264,7 @@ export default function StepResults({ jobId, job, onJobUpdate }: StepResultsProp
                   pose={p}
                   analysis={analyses[p.index]}
                   ai={aiMap[p.index]}
+                  crystal={crystalMap[p.index]}
                   selected={selectedPose === p.index}
                   visible={poseVisible[p.index] ?? true}
                   hasText={Boolean(poseTexts[p.index])}
@@ -318,17 +365,37 @@ export default function StepResults({ jobId, job, onJobUpdate }: StepResultsProp
           <a className="link-btn" href={reportUrl(jobId)} download>
             默认完整报告
           </a>
+          <a className="link-btn" href={auditZipUrl(jobId)} download>
+            {t('audit.download')}
+          </a>
         </div>
         <p className="disclaimer">{DISCLAIMER}</p>
       </div>
       <div>
+        <div className="viewer-toolbar">
+          <button
+            onClick={() => {
+              const dataUrl = viewerRef.current?.capturePng();
+              if (!dataUrl) return;
+              const a = document.createElement('a');
+              a.href = dataUrl;
+              a.download = `dock-pose-${selectedPose ?? 0}.png`;
+              a.click();
+            }}
+          >
+            {t('shot.save')}
+          </button>
+          {crystalSdf !== null && <span className="muted">{t('crystal.th')}</span>}
+        </div>
         <MolViewer
+          ref={viewerRef}
           receptorPdb={receptorPdb}
           poses={viewerPoses}
           selectedIndex={selectedPose}
           boxCenter={result.box.center}
           boxSize={result.box.size}
           highlightResidue={highlight}
+          crystalSdf={crystalSdf}
         />
         <details className="log-details">
           <summary>原始 log</summary>
@@ -373,6 +440,7 @@ interface PoseRowProps {
   pose: { index: number; affinity: number; rmsd_lb: number; rmsd_ub: number };
   analysis: PoseAnalysis | undefined;
   ai: AiRescoreResult | undefined;
+  crystal: CrystalRmsd | undefined;
   selected: boolean;
   visible: boolean;
   hasText: boolean;
@@ -386,6 +454,7 @@ function PoseRow({
   pose,
   analysis,
   ai,
+  crystal,
   selected,
   visible,
   hasText,
@@ -416,6 +485,9 @@ function PoseRow({
       </td>
       <td>
         {pose.rmsd_lb.toFixed(1)} – {pose.rmsd_ub.toFixed(1)}
+      </td>
+      <td>
+        <CrystalRmsdCell rmsd={crystal?.rmsd ?? null} />
       </td>
       <td onClick={(e) => e.stopPropagation()}>
         {badge === 'none' ? (

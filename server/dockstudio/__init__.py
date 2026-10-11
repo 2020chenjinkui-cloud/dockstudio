@@ -10,6 +10,7 @@
 from rdkit import Chem as _Chem  # noqa: F401
 from rdkit.Chem import AllChem as _AllChem  # noqa: F401
 
+
 def _optional_preload() -> None:
     """分析链路的惰性导入预热（缺包无害，仅最佳努力）。"""
     import importlib

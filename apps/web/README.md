@@ -1,6 +1,6 @@
 # DockStudio Web
 
-React 18 + Vite + TypeScript 前端。契约见 `docs/api-contract.md`（当前 v0.5）。
+React 18 + Vite + TypeScript 前端。契约见 `docs/api-contract.md`（当前 v0.6）。
 
 ## 路由
 
@@ -14,7 +14,14 @@ React 18 + Vite + TypeScript 前端。契约见 `docs/api-contract.md`（当前 
   - AI 复核（Boltz-2）：按 /api/capabilities 置灰（tooltip 安装指引 + docs/ai.md 提示）；对话框多选姿态（默认 top 3）+ MSA 服务器开关（默认开，红字提示序列外发）；3s 轮询进度 + 可取消；姿态表合并最新复核结果（logIC50 三位小数 / binder% 一位，表头与单元格 hover 注明 AI 独立预测）；复核历史列表可取消进行中任务；MSA 使用记录常驻红字提示
   - 结果对比：历史抽屉勾选 ≥2 个已完成任务 → 对比模态（最优 affinity 加粗高亮，前端导出 CSV，跨项目可混选）
   - 批量进度页：分段进度条（done/running/failed/canceled/queued）、排行榜（分页 + affinity 排序 + 导 CSV + 行跳 job 结果页）
+  - 2.0 体验包：后端启动等待页（2s 健康轮询，三段式阶段文案，20s 后给日志提示/重试）、顶层 ErrorBoundary 降级页、一键示例（PDB:1HSG + 茚地那韦 → 跳第 3 步自动填盒）、3D 相机保持（结构内容变化才重建/缩放，选中与显隐走增量样式）、截图导出（pngURI → dock-pose-N.png）、共晶参考叠层 + 每姿态 RMSD vs crystal 列（< 2 Å 绿色"通过"）、审计包/事件流下载入口
 - `/debug` — M0 调试台（prepare/dock/file 原始链路，保留供排查）
+
+## 指引包（2.0）
+
+- 受体/配体/配体库步均有"格式与数据来源"折叠卡（PDB/mmCIF 规范与 RCSB 获取、SDF/MOL2/SMILES 规范与盐拆分、.smi/.csv 样例与 ZINC20/ChEMBL 途径）
+- SMILES 输入失焦前端轻量校验（纯数字/空串、空格、超长、非法字符、盐分隔符提醒；不阻断提交）
+- 批量配体库卡内置"载入演示库（10 个常见药物）"：/api/demo/library → 拼 .smi 走 prepare/library 既有流程
 
 ## i18n（zh/en）
 
@@ -60,11 +67,25 @@ npm run dev   # http://localhost:5173
 - `src/rescore.ts` — AI 复核结果合并（最新一次完成任务为权威）、默认姿态选择、表单校验
 - `src/helpText.ts` — 帮助与提示文案（zh 单一事实来源，i18n zh 包引用）
 - `src/router.ts` — 极简 history 路由
-- `src/MolViewer.tsx` — 3Dmol.js 查看器（cartoon + 口袋 stick + 半透明盒、姿态/残基高亮）
+- `src/MolViewer.tsx` — 3Dmol.js 查看器（cartoon + 口袋 stick + 半透明盒、姿态/残基高亮、共晶叠层；内容键驱动全量重建、增量样式更新保相机、pngURI 截图句柄）
+- `src/MolViewerLazy.tsx` — React.lazy + Suspense 包装（3dmol 按需加载）
+- `src/viewerLogic.ts` — viewerContentKey（结构内容指纹）、crystalBadge 等纯函数
 - `src/App.tsx` — I18nProvider、路由分发与主界面壳（项目选择、空状态、onboarding、对比模态）
 - `src/DebugPage.tsx` — M0 调试台
-- `src/components/` — ProjectBar、ConfirmDialog、OnboardingOverlay、Tooltip、CliCard、StatsChip、ReportDialog、CompareDialog、AiRescoreSection、AiRescoreDialog 及 `wizard/`（Wizard、五个步骤、StepBatch、BatchPanel）
+- `src/components/` — ProjectBar、ConfirmDialog、OnboardingOverlay、Tooltip、CliCard、StatsChip、ReportDialog、CompareDialog、AiRescoreSection、AiRescoreDialog、BackendBootGate、ErrorBoundary、FormatHint、CrystalRmsdCell 及 `wizard/`（Wizard、五个步骤、StepBatch、BatchPanel）
+- `src/demo.ts` — 一键示例项目名、演示库 .smi 拼组
+- `src/smiles.ts` — SMILES 前端轻量校验
 - `src/*.test.ts` — vitest 单测
+
+## 构建产物与包体
+
+`npm run build` 后查看 `dist/`。2.0 起 MolViewer 经 React.lazy + manualChunks 拆包（3dmol 按需加载）：
+
+| 版本 | 首屏 JS | gzip | 备注 |
+| --- | --- | --- | --- |
+| M4（未拆包） | index.js 834.95 kB | 244.20 kB | 3dmol 内联主包 |
+| 2.0（拆包） | index.js 95.66 kB + react 141.63 kB | 30.34 + 45.44 kB | 首屏即可用 |
+| 2.0 懒加载 | 3dmol 587.71 kB + MolViewer 2.91 kB | 169.54 + 1.27 kB | 进入 3D 步骤才下载 |
 
 ## TODO
 
@@ -75,3 +96,6 @@ npm run dev   # http://localhost:5173
 - TODO(M4 联调点): `binder_probability` 前端按 0–1 处理（×100 显示百分比）；若后端直接给 0–100 需去掉换算。
 - TODO(M4 联调点): 复核合并视图取"最新一次有结果的任务"（按 finished_at，缺失回退 created_at）；若后端采用"最后一次成功"语义则一致，若需跨任务合并多姿态覆盖再调 `mergeRescoreResults`。
 - TODO: 复核进度轮询间隔 3s（裸 HTTP，无 WS）；v0.5 契约未给复核 WS，后续若加可复用 subscribeJob 模式。
+- TODO(M6 联调点): `GET /api/demo/example` 的 box 与 prepared 记录直接灌入向导 state；若后端 box 与 demo note 文案结构变化需同步。
+- TODO(M6 联调点): 共晶 RMSD 列对非共晶受体 job 全为 null（显示 —）；crystal_ligand 加载失败（非 404）目前同样静默。
+- TODO: BackendBootGate 的阶段文案由本地计时推进（非真实进度）；后端若提供启动阶段事件可接入真实进度。

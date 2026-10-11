@@ -127,6 +127,7 @@ export interface Job {
   id: string;
   project_id: string;
   batch_id: string | null;
+  env?: EnvFingerprint | null;
   status: JobStatus;
   progress: JobProgress;
   request: DockRequest;
@@ -257,6 +258,39 @@ export interface AiRescoreTask {
   created_at: string;
   finished_at: string | null;
   msa_server_used: boolean;
+}
+
+// ---- API v0.6 ----
+
+export interface DemoExample {
+  receptor: PreparedReceptor;
+  ligand: PreparedLigand;
+  box: DockBox;
+  note: string;
+}
+
+export interface DemoLibraryItem {
+  name: string;
+  smiles: string;
+}
+
+export interface DemoLibrary {
+  name: string;
+  items: DemoLibraryItem[];
+}
+
+export interface CrystalRmsd {
+  pose_index: number;
+  rmsd: number | null;
+  reference: string | null;
+}
+
+export interface EnvFingerprint {
+  python: string;
+  rdkit: string;
+  meeko: string;
+  openbabel: string;
+  platform: string;
 }
 
 // ---- API v0.3 ----

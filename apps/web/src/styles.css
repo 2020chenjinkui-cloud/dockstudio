@@ -1319,3 +1319,177 @@ button.danger-outline {
   font-size: 12px;
   margin-top: 6px;
 }
+
+/* ---- 2.0 体验包/指引包 ---- */
+
+.gate {
+  min-height: 60vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.gate-card {
+  width: 400px;
+  max-width: calc(100vw - 40px);
+  text-align: center;
+}
+
+.gate-card h2 {
+  margin-top: 0;
+}
+
+.gate-spinner {
+  width: 28px;
+  height: 28px;
+  margin: 14px auto;
+  border: 3px solid #3b4757;
+  border-top-color: #2f6fed;
+  border-radius: 50%;
+  animation: gate-spin 0.9s linear infinite;
+}
+
+@keyframes gate-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.gate-stage {
+  color: #9fb4d0;
+  margin: 0 0 6px;
+}
+
+.gate-actions {
+  justify-content: center;
+}
+
+.gate-log-text {
+  text-align: left;
+  font-size: 12.5px;
+  line-height: 1.7;
+}
+
+.err-detail {
+  max-height: 160px;
+  text-align: left;
+  font-size: 12px;
+}
+
+/* 演示 */
+
+.demo-note {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  background: #1c2740;
+  border: 1px solid #2f6fed;
+  border-radius: 8px;
+  padding: 10px 14px;
+  margin-bottom: 12px;
+  font-size: 13px;
+}
+
+/* 截图工具条 */
+
+.viewer-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.mol-viewer-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #5a6578;
+}
+
+/* 共晶 RMSD */
+
+.crystal-pass {
+  color: #8fd18f;
+  font-weight: 600;
+}
+
+.crystal-badge {
+  margin-left: 6px;
+  cursor: default;
+}
+
+/* 格式提示卡 */
+
+.format-hint {
+  border: 1px solid #2a3342;
+  border-radius: 6px;
+  font-size: 13px;
+}
+
+.format-hint-toggle {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: none;
+  border: none;
+  padding: 8px 12px;
+  color: #9fb4d0;
+  text-align: left;
+}
+
+.format-hint-toggle:hover:not(:disabled) {
+  background: none;
+  color: #d7dee9;
+}
+
+.format-hint-arrow {
+  color: #5a6578;
+}
+
+.format-hint-body {
+  margin: 0;
+  padding: 4px 14px 12px 32px;
+  color: #b6c2d4;
+  line-height: 1.8;
+}
+
+.format-hint-body li {
+  margin-bottom: 2px;
+}
+
+.format-hint-example {
+  background: #12161d;
+  border-radius: 6px;
+  padding: 8px 10px;
+  font-size: 12px;
+  margin: 6px 0 0;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+/* SMILES 即查 */
+
+.smiles-check {
+  margin: 4px 0 0;
+  font-size: 12.5px;
+}
+
+.smiles-check.smiles-ok {
+  color: #58c472;
+}
+
+.smiles-check.smiles-warn {
+  color: #e0c07f;
+}
+
+.smiles-check.smiles-error {
+  color: #f08a97;
+}
+
+.drawer-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}

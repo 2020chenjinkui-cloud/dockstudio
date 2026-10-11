@@ -2,18 +2,21 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   createProject,
   deleteProject,
+  getDemoExample,
   getEngines,
   getHealth,
   listProjects,
 } from './api';
+import BackendBootGate from './components/BackendBootGate';
 import CompareDialog from './components/CompareDialog';
 import OnboardingOverlay, { ONBOARDING_KEY } from './components/OnboardingOverlay';
 import ProjectBar from './components/ProjectBar';
 import Wizard from './components/wizard/Wizard';
 import DebugPage from './DebugPage';
-import { I18nContext, LANG_KEY, translate, type Lang } from './i18n';
+import { DEMO_PROJECT_NAME } from './demo';
+import { I18nContext, LANG_KEY, translate, useI18n, type Lang } from './i18n';
 import { useRoute } from './router';
-import type { EngineManifest, Project } from './types';
+import type { DemoExample, EngineManifest, Project } from './types';
 
 export default function App() {
   const route = useRoute();
@@ -40,6 +43,7 @@ export default function App() {
 }
 
 function WizardPage() {
+  const { t } = useI18n();
   const [projects, setProjects] = useState<Project[] | null>(null);
   const [currentId, setCurrentId] = useState<string | null>(null);
   const [engines, setEngines] = useState<EngineManifest[]>([]);
@@ -48,6 +52,8 @@ function WizardPage() {
   const [resumeBatchId, setResumeBatchId] = useState<string | null>(null);
   const [compareIds, setCompareIds] = useState<string[]>([]);
   const [compareOpen, setCompareOpen] = useState(false);
+  const [demo, setDemo] = useState<DemoExample | null>(null);
+  const [demoBusy, setDemoBusy] = useState(false);
   const [newName, setNewName] = useState('');
   const [createError, setCreateError] = useState<string | null>(null);
   const [showOnboarding, setShowOnboarding] = useState(
@@ -109,6 +115,22 @@ function WizardPage() {
     }
   };
 
+  const loadDemoProject = async () => {
+    setDemoBusy(true);
+    setCreateError(null);
+    try {
+      const demoData = await getDemoExample();
+      const existing = (projects ?? []).find((p) => p.name === DEMO_PROJECT_NAME);
+      const project = existing ?? (await createProject(DEMO_PROJECT_NAME));
+      setDemo(demoData);
+      await refreshProjects(project.id);
+    } catch (e) {
+      setCreateError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setDemoBusy(false);
+    }
+  };
+
   return (
     <div className="app">
       <ProjectBar
@@ -123,6 +145,7 @@ function WizardPage() {
           setResumeJobId(null);
           setResumeBatchId(null);
           setCompareIds([]);
+          setDemo(null);
         }}
         onCreate={handleCreate}
         onDelete={handleDelete}
@@ -136,47 +159,53 @@ function WizardPage() {
         }}
       />
       <main className="main-area">
-        {projects === null ? (
-          <p className="muted">加载项目列表…</p>
-        ) : projects.length === 0 || !current ? (
-          <section className="card empty-state">
-            <h2>欢迎使用 DockStudio</h2>
-            <p className="muted">
-              从创建一个项目开始：项目用于组织你的受体、配体与对接任务。
-            </p>
-            <div className="row">
-              <input
-                type="text"
-                placeholder="项目名称，例如：KRAS 初筛"
-                value={newName}
-                onChange={(e) => setNewName(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') void submitFirstProject();
-                }}
-              />
-              <button className="primary" onClick={() => void submitFirstProject()}>
-                创建项目
+        <BackendBootGate>
+          {projects === null ? (
+            <p className="muted">加载项目列表…</p>
+          ) : projects.length === 0 || !current ? (
+            <section className="card empty-state">
+              <h2>欢迎使用 DockStudio</h2>
+              <p className="muted">
+                从创建一个项目开始：项目用于组织你的受体、配体与对接任务。
+              </p>
+              <div className="row">
+                <input
+                  type="text"
+                  placeholder="项目名称，例如：KRAS 初筛"
+                  value={newName}
+                  onChange={(e) => setNewName(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') void submitFirstProject();
+                  }}
+                />
+                <button className="primary" onClick={() => void submitFirstProject()}>
+                  创建项目
+                </button>
+              </div>
+              <button className="chip" onClick={() => void loadDemoProject()} disabled={demoBusy}>
+                {demoBusy ? t('demo.loading') : t('demo.load')}
               </button>
-            </div>
-            {createError && <p className="error-text">{createError}</p>}
-          </section>
-        ) : (
-          <Wizard
-            key={current.id}
-            projectId={current.id}
-            engines={engines}
-            resumeJobId={resumeJobId}
-            resumeBatchId={resumeBatchId}
-            onResumeHandled={() => {
-              setResumeJobId(null);
-              setResumeBatchId(null);
-            }}
-            onOpenJob={(jobId) => {
-              setResumeBatchId(null);
-              setResumeJobId(jobId);
-            }}
-          />
-        )}
+              {createError && <p className="error-text">{createError}</p>}
+            </section>
+          ) : (
+            <Wizard
+              key={current.id}
+              projectId={current.id}
+              engines={engines}
+              resumeJobId={resumeJobId}
+              resumeBatchId={resumeBatchId}
+              demo={demo}
+              onResumeHandled={() => {
+                setResumeJobId(null);
+                setResumeBatchId(null);
+              }}
+              onOpenJob={(jobId) => {
+                setResumeBatchId(null);
+                setResumeJobId(jobId);
+              }}
+            />
+          )}
+        </BackendBootGate>
       </main>
       {showOnboarding && <OnboardingOverlay onDone={closeOnboarding} />}
       {compareOpen && (

@@ -134,6 +134,7 @@ class Job(BaseModel):
     id: str
     project_id: str
     batch_id: str | None = None  # M2：批量筛选归属
+    env: EnvFingerprint | None = None  # 2.0：任务创建时的软件环境指纹
     status: JobStatus = JobStatus.queued
     progress: JobProgress = Field(default_factory=JobProgress)
     request: DockJobRequest
@@ -291,6 +292,35 @@ class AiAvailability(BaseModel):
     available: bool
     reason: str | None = None  # 不可用时的中文说明/安装指引
     mode: str | None = None  # "venv" | "cmd" | None
+
+
+# ---------------------------------------------------------------------------
+# 2.0: 溯源与演示
+
+
+class CrystalRmsd(BaseModel):
+    pose_index: int
+    rmsd: float | None = None  # 与共晶配体重原子 RMSD（Å）；无共晶时 null
+    reference: str | None = None  # 参考构象来源，如 "MK1:A"
+
+
+class DemoExample(BaseModel):
+    """内置示例一键载入的返回：受体/配体已就绪 + 推荐盒子。"""
+
+    receptor: PreparedReceptor
+    ligand: PreparedLigand
+    box: Box
+    note: str = ""
+
+
+class EnvFingerprint(BaseModel):
+    """记录任务时的软件环境（复现用）。"""
+
+    python: str = ""
+    rdkit: str = ""
+    meeko: str = ""
+    openbabel: str = ""
+    platform: str = ""
 
 
 # ---------------------------------------------------------------------------

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { listPreparedReceptors, prepareReceptor } from '../../api';
 import type { PreparedReceptor } from '../../types';
+import FormatHint from '../FormatHint';
 
 interface StepReceptorProps {
   receptor: PreparedReceptor | null;
@@ -41,6 +42,7 @@ export default function StepReceptor({ receptor, onPrepared, onAutoBox }: StepRe
 
   return (
     <div className="step-body">
+      <FormatHint kind="receptor" />
       <div className="tabs">
         <button className={mode === 'upload' ? 'active' : ''} onClick={() => setMode('upload')}>
           上传 PDB

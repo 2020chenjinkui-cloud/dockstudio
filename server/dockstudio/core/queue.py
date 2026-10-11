@@ -66,10 +66,12 @@ class JobRunner:
         store: ProjectStore,
         registry: PrepareRegistry,
         bus: EventBus | None = None,
+        event_emitter: Callable[[Job, str, dict], None] | None = None,
     ):
         self.store = store
         self.registry = registry
         self.bus = bus or EventBus()
+        self.event_emitter = event_emitter  # (job, action, payload), e.g. EventLog.emit
         self._queue: asyncio.Queue[str] = asyncio.Queue()
         self._jobs: dict[str, Job] = {}
         self._cancel_requested: set[str] = set()
@@ -144,9 +146,17 @@ class JobRunner:
                     job.finished_at = datetime.now()  # noqa: DTZ005
                     self.store.save_job(job)
                     self._emit_finished(job)
+                    self._lifecycle(job, "job.failed", {"error": job.error})
             finally:
                 self._cancel_requested.discard(job_id)
                 self._queue.task_done()
+
+    def _lifecycle(self, job: Job, action: str, payload: dict) -> None:
+        if self.event_emitter is not None:
+            try:
+                self.event_emitter(job, action, payload)
+            except Exception as exc:  # noqa: BLE001
+                log.warning("event emitter failed for %s on job %s: %s", action, job.id, exc)
 
     async def _run(self, job: Job) -> None:
         loop = asyncio.get_running_loop()
@@ -154,6 +164,7 @@ class JobRunner:
         job.started_at = datetime.now()  # noqa: DTZ005
         self._set_progress(job, "docking", 5.0, "对接中")
         self._emit_status(job)
+        self._lifecycle(job, "job.started", {"engine": job.request.engine})
 
         engine = get_engine(job.request.engine)
         if engine is None:
@@ -209,6 +220,7 @@ class JobRunner:
                 job.finished_at = datetime.now()  # noqa: DTZ005
                 self.store.save_job(job)
                 self._emit_finished(job)
+                self._lifecycle(job, "job.canceled", {})
                 return
             raise PreparationError(f"dock crashed: {exc}") from exc
 
@@ -218,6 +230,7 @@ class JobRunner:
             job.finished_at = datetime.now()  # noqa: DTZ005
             self.store.save_job(job)
             self._emit_finished(job)
+            self._lifecycle(job, "job.canceled", {})
             return
 
         result.run_dir = str(run_dir)
@@ -246,6 +259,14 @@ class JobRunner:
         job.finished_at = datetime.now()  # noqa: DTZ005
         self.store.save_job(job)
         self._emit_finished(job)
+        self._lifecycle(
+            job,
+            "job.completed",
+            {
+                "top_affinity": (result.poses[0].affinity if result.poses else None),
+                "n_poses": len(result.poses),
+            },
+        )
         log.info(
             "job %s completed: %d poses, top=%.2f",
             job.id,

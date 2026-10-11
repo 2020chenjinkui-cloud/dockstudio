@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { getProject } from '../api';
+import { getProject, projectEventsUrl } from '../api';
 import { toggleCompareId } from '../compare';
 import { useI18n } from '../i18n';
 import type { Project, ProjectDetail, ProjectJobSummary } from '../types';
@@ -166,9 +166,21 @@ export default function ProjectBar({
           <aside className="drawer" onClick={(e) => e.stopPropagation()}>
             <div className="drawer-head">
               <h3>{t('bar.history')}</h3>
-              <button className="link-btn" onClick={() => setDrawerOpen(false)}>
-                {t('bar.close')}
-              </button>
+              <span className="drawer-head-actions">
+                {current && (
+                  <a
+                    className="link-btn"
+                    href={projectEventsUrl(current.id)}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    {t('audit.events')}
+                  </a>
+                )}
+                <button className="link-btn" onClick={() => setDrawerOpen(false)}>
+                  {t('bar.close')}
+                </button>
+              </span>
             </div>
             <div className="drawer-body">
               {!detail && <p className="muted">{t('common.loading')}</p>}
