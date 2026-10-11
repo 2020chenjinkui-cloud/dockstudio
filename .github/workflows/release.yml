@@ -36,6 +36,8 @@ jobs:
       - run: cd apps/desktop && npm ci
       - name: Tauri Build + 上传 Release
         uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           projectPath: apps/desktop
           tagName: ${{ github.ref_name }}
