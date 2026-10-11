@@ -1,0 +1,58 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  desktop-installers:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-14]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          cache: workspaces -> apps/desktop/src-tauri
+      - name: Linux WebKitGTK 依赖
+        if: matrix.os == 'ubuntu-latest'
+        run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+      - run: bash scripts/fetch_engines.sh
+      - run: pip install -e "server[dev]" pyinstaller
+      - run: pyinstaller scripts/backend_onefile.spec --noconfirm --clean
+      - name: Rename sidecar per target triple
+        run: bash scripts/stage_sidecar.sh
+      - run: cd apps/web && npm ci && npm run build
+      - run: cd apps/desktop && npm ci
+      - name: Tauri Build + 上传 Release
+        uses: tauri-apps/tauri-action@v0
+        with:
+          projectPath: apps/desktop
+          tagName: ${{ github.ref_name }}
+          releaseName: "DockStudio ${{ github.ref_name }}"
+          releaseDraft: false
+          prerelease: false
+          releaseBody: |
+            首个公开版本：跨平台（Windows / macOS / Linux）分子对接平台，简易五步向导 + 高级批量筛选双模式。
+
+            **内置能力**
+            - AutoDock Vina 一键内置；smina 引擎；gnina / Uni-Dock GPU 引擎（Linux + NVIDIA）可插拔
+            - 五步向导：受体准备 → 配体 → 口袋/盒子（含内置几何口袋预测与共晶配体一键定盒）→ 运行 → 结果
+            - 批量虚拟筛选（队列/可取消/实时排行榜/CSV 导出）、柔性残基对接、等效命令行复现
+            - 相互作用分析（PLIP / 2D 示意图）、PoseBusters 姿态质检、自包含 HTML 报告
+            - Boltz-2 AI 亲和性复核（需自备 boltz 安装）
+            - 全程溯源：事件流 + audit.zip 审计包 + 环境指纹（rdkit/meeko/openbabel 版本）+ 输入文件 SHA256
+            - 中英双语界面
+
+            **自检体系**：后端 112 测试 + 前端 97 测试 + 10 靶点金标准回归（每周自动）。
+            文档与操作手册见仓库 docs/。
