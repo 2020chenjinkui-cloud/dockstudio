@@ -45,16 +45,19 @@ jobs:
           releaseDraft: false
           prerelease: false
           releaseBody: |
-            首个公开版本：跨平台（Windows / macOS / Linux）分子对接平台，简易五步向导 + 高级批量筛选双模式。
+            DockStudio 2.0：跨平台（Windows / macOS / Linux）分子对接平台，简易五步向导 + 高级批量筛选双模式。
 
-            **内置能力**
+            **核心能力**
             - AutoDock Vina 一键内置；smina 引擎；gnina / Uni-Dock GPU 引擎（Linux + NVIDIA）可插拔
-            - 五步向导：受体准备 → 配体 → 口袋/盒子（含内置几何口袋预测与共晶配体一键定盒）→ 运行 → 结果
-            - 批量虚拟筛选（队列/可取消/实时排行榜/CSV 导出）、柔性残基对接、等效命令行复现
-            - 相互作用分析（PLIP / 2D 示意图）、PoseBusters 姿态质检、自包含 HTML 报告
+            - 五步向导 + 内置一键示例（PDB:1HSG）：受体/配体准备、口袋预测、对接、结果分析
+            - 批量虚拟筛选（队列/取消/排行/CSV）、柔性残基、等效命令行复现
+            - PLIP 相互作用 / 2D 示意图 / PoseBusters 质检 / 共晶 RMSD 对照 / 截图导出
             - Boltz-2 AI 亲和性复核（需自备 boltz 安装）
-            - 全程溯源：事件流 + audit.zip 审计包 + 环境指纹（rdkit/meeko/openbabel 版本）+ 输入文件 SHA256
-            - 中英双语界面
 
-            **自检体系**：后端 112 测试 + 前端 97 测试 + 10 靶点金标准回归（每周自动）。
-            文档与操作手册见仓库 docs/。
+            **2.0 新增：可溯源与用户体验**
+            - 全程溯源：事件流 JSONL、audit.zip 审计包、`dockstudio audit` CLI、rdkit/meeko/openbabel 版本环境指纹、输入文件 SHA256
+            - 一键示例项目、后端启动等待页、截图与共晶参考、首屏包体 835KB→96KB
+            - 输入规范指引卡（RCSB/PubChem/ZINC 来源向导）+ SMILES 即查 + 演示分子库（10 个真实药物）
+            - 中英双语界面、依赖上界锁定（rdkit<2026.4）保证跨环境可复现
+
+            **自检**：后端 112 测试 + 前端 97 测试 + 10 靶点金标准回归；安装包在 Windows NSIS（静默安装实测）/ Linux DEB 与 AppImage（真机实测）通过。
