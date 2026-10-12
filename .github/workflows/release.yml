@@ -3,16 +3,20 @@ name: Release
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tagName:
+        description: "要发布到的 tag（留空则用当前 ref）"
+        required: false
+        default: ""
 
 permissions:
   contents: write
 
 jobs:
-  desktop-installers:
-    strategy:
-      matrix:
-        os: [ubuntu-latest, windows-latest, macos-14]
-    runs-on: ${{ matrix.os }}
+  # Linux 安装包走自托管 runner（ubuntu-p4）：不消耗账户 Actions 分钟
+  linux-installers:
+    runs-on: [self-hosted, linux, x64]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -25,8 +29,7 @@ jobs:
         with:
           cache: workspaces -> apps/desktop/src-tauri
       - name: Linux WebKitGTK 依赖
-        if: matrix.os == 'ubuntu-latest'
-        run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+        run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev patchelf rpm
       - run: bash scripts/fetch_engines.sh
       - run: pip install -e "server[dev]" pyinstaller
       - run: pyinstaller scripts/backend_onefile.spec --noconfirm --clean
@@ -40,8 +43,8 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           projectPath: apps/desktop
-          tagName: ${{ github.ref_name }}
-          releaseName: "DockStudio ${{ github.ref_name }}"
+          tagName: ${{ inputs.tagName || github.ref_name }}
+          releaseName: "DockStudio ${{ inputs.tagName || github.ref_name }}"
           releaseDraft: false
           prerelease: false
           releaseBody: |
@@ -61,3 +64,38 @@ jobs:
             - 中英双语界面、依赖上界锁定（rdkit<2026.4）保证跨环境可复现
 
             **自检**：后端 112 测试 + 前端 97 测试 + 10 靶点金标准回归；安装包在 Windows NSIS（静默安装实测）/ Linux DEB 与 AppImage（真机实测）通过。
+
+  # Windows / macOS 仍需 GitHub-hosted runner（依赖账户 Actions 额度）
+  desktop-installers:
+    strategy:
+      matrix:
+        os: [windows-latest, macos-14]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          cache: workspaces -> apps/desktop/src-tauri
+      - run: bash scripts/fetch_engines.sh
+      - run: pip install -e "server[dev]" pyinstaller
+      - run: pyinstaller scripts/backend_onefile.spec --noconfirm --clean
+      - name: Rename sidecar per target triple
+        run: bash scripts/stage_sidecar.sh
+      - run: cd apps/web && npm ci && npm run build
+      - run: cd apps/desktop && npm ci
+      - name: Tauri Build + 上传 Release
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          projectPath: apps/desktop
+          tagName: ${{ inputs.tagName || github.ref_name }}
+          releaseName: "DockStudio ${{ inputs.tagName || github.ref_name }}"
+          releaseDraft: false
+          prerelease: false
