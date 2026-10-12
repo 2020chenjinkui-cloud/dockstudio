@@ -12,7 +12,7 @@ fetch() {  # fetch <asset> <dest>
   mkdir -p "$(dirname "$dest")"
   if [ -f "$dest" ]; then echo "exists: $dest"; return; fi
   echo "downloading $asset"
-  curl -sfL -o "$dest" "$BASE/$asset"
+  curl -sfL --retry 5 --retry-all-errors --retry-delay 2 -o "$dest" "$BASE/$asset"
   chmod +x "$dest"
 }
 
