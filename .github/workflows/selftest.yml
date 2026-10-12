@@ -1,0 +1,13 @@
+name: SelfHostTest
+
+on:
+  workflow_dispatch:
+
+jobs:
+  probe:
+    runs-on: [self-hosted, linux, x64, p4]
+    steps:
+      - run: uname -a; python3 --version; docker --version; nvidia-smi -L | head -2; df -h / | tail -1
+      - uses: actions/checkout@v4
+      - run: bash scripts/fetch_engines.sh
+      - run: resources/bin/linux-x86_64/vina --version
