@@ -2,9 +2,15 @@
 
 from __future__ import annotations
 
+import os
 from typing import Literal
 
 from pydantic import BaseModel, Field
+
+
+def _default_cpu() -> int:
+    # cpu 只影响速度不影响结果：默认吃到 8 线程封顶，避免新手向导动辄 7 分钟的等待
+    return max(2, min(os.cpu_count() or 4, 8))
 
 
 class Box(BaseModel):
@@ -20,7 +26,7 @@ class DockParams(BaseModel):
     exhaustiveness: int = Field(default=8, ge=1, le=64)
     num_modes: int = Field(default=9, ge=1, le=100)
     energy_range: float = Field(default=3.0, gt=0)
-    cpu: int = Field(default=1, ge=1)
+    cpu: int = Field(default_factory=_default_cpu, ge=1)
     seed: int | None = None
     scoring: str = "vina"  # must be in engine manifest scoring_functions
 

@@ -31,4 +31,4 @@ def _optional_preload() -> None:
 
 _optional_preload()
 
-__version__ = "2.0.3"
+__version__ = "2.0.4"
