@@ -63,10 +63,20 @@ async function handle<T>(res: Response): Promise<T> {
   return (await res.json()) as T;
 }
 
+// 桌面端（Tauri webview）里相对路径会解析到 tauri.localhost 协议，到不了后端，
+// 必须显式指向 127.0.0.1:8000；浏览器/开发模式保持相对路径走 vite 代理。
+export const IS_TAURI =
+  typeof window !== 'undefined' &&
+  (window.location.protocol === 'tauri:' ||
+    window.location.hostname === 'tauri.localhost' ||
+    '__TAURI_INTERNALS__' in window);
+export const API_BASE = IS_TAURI ? 'http://127.0.0.1:8000' : '';
+const WS_HOST = IS_TAURI ? '127.0.0.1:8000' : typeof window !== 'undefined' ? window.location.host : '';
+
 async function req<T>(input: string, init?: RequestInit): Promise<T> {
   let res: Response;
   try {
-    res = await fetch(input, init);
+    res = await fetch(API_BASE + input, init);
   } catch (e) {
     if (isNetworkError(e)) throw new ApiError('后端未启动或无法连接（http://localhost:8000）', 0);
     throw e;
@@ -226,7 +236,7 @@ export function subscribeJob(jid: string, handlers: JobSubscription): () => void
 
   try {
     const proto = window.location.protocol === 'https:' ? 'wss' : 'ws';
-    ws = new WebSocket(`${proto}://${window.location.host}/ws/jobs/${jid}`);
+    ws = new WebSocket(`${proto}://${WS_HOST}/ws/jobs/${jid}`);
     ws.onmessage = (ev: MessageEvent<string>) => {
       if (stopped) return;
       let evt: JobEvent;
@@ -367,7 +377,7 @@ export function subscribeBatch(bid: string, handlers: BatchSubscription): () => 
 
   try {
     const proto = window.location.protocol === 'https:' ? 'wss' : 'ws';
-    ws = new WebSocket(`${proto}://${window.location.host}/ws/batches/${bid}`);
+    ws = new WebSocket(`${proto}://${WS_HOST}/ws/batches/${bid}`);
     ws.onmessage = (ev: MessageEvent<string>) => {
       if (stopped) return;
       let evt: BatchEvent;
