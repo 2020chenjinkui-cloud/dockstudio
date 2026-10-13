@@ -127,7 +127,7 @@ export async function dock(body: DockRequest): Promise<DockResult> {
 }
 
 export async function fetchFile(path: string): Promise<string> {
-  const res = await fetch(`/api/file?path=${encodeURIComponent(path)}`);
+  const res = await fetch(`${API_BASE}/api/file?path=${encodeURIComponent(path)}`);
   if (!res.ok) {
     let detail = `${res.status} ${res.statusText}`;
     try {
@@ -481,7 +481,7 @@ export async function getDemoLibrary(): Promise<DemoLibrary> {
 }
 
 export async function fetchCrystalLigand(jid: string): Promise<string | null> {
-  const res = await fetch(`/api/jobs/${jid}/crystal_ligand`);
+  const res = await fetch(`${API_BASE}/api/jobs/${jid}/crystal_ligand`);
   if (res.status === 404) return null;
   if (!res.ok) return null;
   return res.text();

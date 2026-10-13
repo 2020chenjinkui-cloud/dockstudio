@@ -71,9 +71,18 @@ function WizardPage() {
   }, []);
 
   useEffect(() => {
-    getHealth()
-      .then(() => setBackendOk(true))
-      .catch(() => setBackendOk(false));
+    // 周期心跳：一次性探测撞上瞬态失败会把状态灯永久卡住，必须轮询恢复
+    const check = () => {
+      getHealth()
+        .then(() => setBackendOk(true))
+        .catch(() => setBackendOk(false));
+    };
+    check();
+    const timer = window.setInterval(check, 5000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
     getEngines()
       .then(setEngines)
       .catch(() => setEngines([]));

@@ -33,6 +33,8 @@ a = Analysis(
     binaries=_ob_binaries,
     datas=[
         (str(ROOT / "resources" / "bin"), "resources/bin"),
+        # 内置演示项目数据（1HSG 受体/配体/SMILES），冻结包里缺了 /api/demo/example 直接 500
+        (str(ROOT / "server" / "dockstudio" / "demo_data"), "dockstudio/demo_data"),
     ]
     + _ob_datas
     + _rdkit_datas
