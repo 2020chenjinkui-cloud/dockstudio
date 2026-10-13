@@ -59,7 +59,14 @@ from ..prep.receptor import prepare_receptor
 
 log = get_logger("api.app")
 
-_ALLOWED_ORIGINS = ["http://localhost:5173", "http://127.0.0.1:5173"]
+# 放行来源：vite 开发服务器 + Tauri 生产 webview
+# （Windows/Linux 为 http://tauri.localhost，macOS 为 tauri://localhost）
+_ALLOWED_ORIGINS = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "http://tauri.localhost",
+    "tauri://localhost",
+]
 
 
 class CreateProjectRequest(BaseModel):
