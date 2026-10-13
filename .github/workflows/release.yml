@@ -15,6 +15,9 @@ permissions:
 
 jobs:
   # Linux 安装包走自托管 runner（ubuntu-p4）：不消耗账户 Actions 分钟
+  # runner 预置项（2026-10-12 实装，防 GitHub 直连超时）：
+  #   ~/.cache/tauri/ 下的 AppRun-x86_64 与 linuxdeploy-x86_64.AppImage（tauri 打包工具缓存）
+  #   /usr/local/bin/appimagetool（linuxdeploy-plugin-appimage 运行期依赖，PATH 命中则不再下载）
   linux-installers:
     runs-on: [self-hosted, linux, x64]
     steps:
