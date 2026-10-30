@@ -57,8 +57,8 @@ export interface DockParams {
 export interface DockPose {
   index: number;
   affinity: number;
-  rmsd_lb: number;
-  rmsd_ub: number;
+  rmsd_lb: number | null;
+  rmsd_ub: number | null;
   file: string;
 }
 
@@ -244,7 +244,7 @@ export interface AiRescoreResult {
   pose_index: number;
   log_ic50: number;
   binder_probability: number;
-  rank_by_score: number;
+  rank_by_score: number | null;
 }
 
 export interface AiRescoreTask {

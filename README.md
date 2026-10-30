@@ -113,8 +113,8 @@ docs/        Dev docs: API contract, audit schema, SDK, deploy, AI-agent guide
 
 ## Testing & QA
 
-- **112 backend tests** (pytest, incl. real-Vina end-to-end) + ruff lint
-- **97 frontend tests**
+- **123 backend tests** (pytest, incl. real-Vina end-to-end) + ruff lint
+- **98 frontend tests**
 - **Golden redocking regression** over 10 co-crystal targets (weekly self-hosted CI)
 - Installers are smoke-tested for real: silent NSIS install on Windows, DEB/AppImage on physical Linux machines
 - CI: GitHub Actions (GitHub-hosted for win/mac, self-hosted runner for Linux builds & GPU-adjacent jobs)

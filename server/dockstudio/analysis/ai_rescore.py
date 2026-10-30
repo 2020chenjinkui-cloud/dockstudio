@@ -354,9 +354,17 @@ class RescoreRunner:
             try:
                 self._run(task, job)
             except Exception as exc:  # noqa: BLE001
-                log.error("rescore task %s crashed: %s", task.id, exc)
-                task.status = JobStatus.failed
-                task.error = str(exc)
+                if task.id in self._cancel_requested:
+                    log.info("rescore task %s canceled", task.id)
+                    task.status = JobStatus.canceled
+                    task.progress.message = "已取消"
+                else:
+                    log.error("rescore task %s crashed: %s", task.id, exc)
+                    task.status = JobStatus.failed
+                    task.error = str(exc)
+                from datetime import datetime
+
+                task.finished_at = task.finished_at or datetime.now()
                 self._save(task, job)
 
     def _run(self, task: AiRescoreTask, job: Job) -> None:
@@ -374,33 +382,34 @@ class RescoreRunner:
 
         task_dir = self._ai_dir(job, task.id)
         yaml_path, _seq, _smiles = self._write_inputs(job, task_dir)
-        outs: list[AiRescorePoseResult] = []
-        for i, pose_index in enumerate(task.pose_indices):
-            if task.id in self._cancel_requested:
-                task.status = JobStatus.canceled
-                task.finished_at = datetime.now()
-                self._save(task, job)
-                return
-            task.progress.stage = "scoring"
-            task.progress.message = f"Boltz-2 推理 {i + 1}/{len(task.pose_indices)}"
-            task.progress.percent = 10.0 + 80.0 * i / max(len(task.pose_indices), 1)
+        task.progress.stage = "scoring"
+        task.progress.message = "Boltz-2 推理（配体级预测，与姿态几何无关）"
+        task.progress.percent = 20.0
+        self._save(task, job)
+        if task.id in self._cancel_requested:
+            task.status = JobStatus.canceled
+            task.finished_at = datetime.now()
             self._save(task, job)
+            return
 
-            out_dir = task_dir / f"out_pose_{pose_index}"
-            out_dir.mkdir(parents=True, exist_ok=True)
-            self._invoke_boltz(available, yaml_path, out_dir, task.msa_server_used)
-            log_ic50, prob = parse_affinity_json(out_dir)
-            outs.append(
-                AiRescorePoseResult(
-                    pose_index=pose_index,
-                    log_ic50=log_ic50,
-                    binder_probability=prob,
-                    rank_by_score=i + 1,
-                )
+        # Boltz-2's affinity head consumes protein sequence + ligand SMILES; pose
+        # coordinates are not part of the input.  Running it once per pose would
+        # burn identical GPU work N times and produce identical numbers, so run it
+        # exactly once and expose the result as a ligand-level prediction.
+        out_dir = task_dir / "out_ligand"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        self._invoke_boltz(available, yaml_path, out_dir, task.msa_server_used)
+        log_ic50, prob = parse_affinity_json(out_dir)
+        task.results = [
+            AiRescorePoseResult(
+                pose_index=pose_index,
+                log_ic50=log_ic50,
+                binder_probability=prob,
+                rank_by_score=None,
             )
-            # persist partial progress so a crash keeps finished poses
-            task.results = outs
-            self._save(task, job)
+            for pose_index in task.pose_indices
+        ]
+        self._save(task, job)
 
         if task.id in self._cancel_requested:
             task.status = JobStatus.canceled
@@ -408,7 +417,7 @@ class RescoreRunner:
             task.status = JobStatus.completed
             task.progress.stage = "done"
             task.progress.percent = 100.0
-            task.progress.message = "完成"
+            task.progress.message = "完成（配体级预测）"
         task.finished_at = datetime.now()
         self._save(task, job)
         self._lifecycle(

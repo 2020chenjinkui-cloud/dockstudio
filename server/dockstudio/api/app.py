@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
+import sys
 import traceback
 import uuid
 from contextlib import asynccontextmanager
@@ -152,6 +154,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def lifespan(_app: FastAPI):
         runner.start()
         rescore.start()
+        if os.environ.get("DOCKSTUDIO_ENABLE_WATCHDOG") == "1":
+            from ..core.lifecycle import install_parent_watchdog
+
+            # Start after the heavy app imports; creating this thread during
+            # uvicorn's factory import can deadlock the frozen onefile child.
+            install_parent_watchdog()
         try:
             yield
         finally:
@@ -248,8 +256,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         content = await _read_upload(file)
         if not content.strip():
             raise PreparationError("上传文件为空，请选择有效的 PDB 文件。")
-        receptor = prepare_receptor(
-            content, file.filename or "receptor.pdb", registry.receptors_dir
+        receptor = await asyncio.get_running_loop().run_in_executor(
+            None, prepare_receptor, content, file.filename or "receptor.pdb", registry.receptors_dir
         )
         registry.add_receptor(receptor)
         events_for("_prepared").emit(
@@ -278,6 +286,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         has_smiles = smiles is not None and smiles.strip() != ""
         if has_file == has_smiles:
             raise PreparationError("provide exactly one of 'file' or 'smiles'")
+        loop = asyncio.get_running_loop()
         if has_file:
             assert file is not None and file.filename is not None
             content = await _read_upload(file)
@@ -287,11 +296,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             tmp_path = registry.ligands_dir / f"upload_{safe_name}"
             tmp_path.write_bytes(content)
             try:
-                ligand = prepare_ligand_from_file(tmp_path, registry.ligands_dir)
+                ligand = await loop.run_in_executor(
+                    None, prepare_ligand_from_file, tmp_path, registry.ligands_dir
+                )
             finally:
                 tmp_path.unlink(missing_ok=True)
         else:
-            ligand = prepare_ligand_from_smiles(smiles or "", name, registry.ligands_dir)
+            ligand = await loop.run_in_executor(
+                None, prepare_ligand_from_smiles, smiles or "", name, registry.ligands_dir
+            )
         registry.add_ligand(ligand)
         events_for("_prepared").emit(
             "ligand.prepared",
@@ -307,7 +320,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return ligand
 
     @app.post("/api/dock")
-    async def dock_endpoint(req: DockJobRequest) -> DockResult:
+    def dock_endpoint(req: DockJobRequest) -> DockResult:
         engine = get_engine(req.engine)
         if engine is None:
             raise PreparationError(f"unknown engine: {req.engine}")
@@ -415,6 +428,20 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def submit_job(pid: str, body: DockJobRequest):
         if store.get(pid) is None:
             return _not_found("project")
+        if body.receptor_id not in registry.receptors:
+            raise PreparationError(f"unknown receptor_id: {body.receptor_id}")
+        if body.ligand_id not in registry.ligands:
+            raise PreparationError(f"unknown ligand_id: {body.ligand_id}")
+        engine = get_engine(body.engine)
+        if engine is not None:
+            if body.params.scoring not in engine.manifest.scoring_functions:
+                raise PreparationError(
+                    f"scoring '{body.params.scoring}' not supported by {body.engine} "
+                    f"(supported: {engine.manifest.scoring_functions})"
+                )
+            ok, reason = engine.is_available()
+            if not ok:
+                raise EngineUnavailableError(reason or f"engine {body.engine} is unavailable")
         job = store.new_job(pid, body)
         job.env = env_fingerprint()
         hashes = _save_input_hashes(job)
@@ -454,7 +481,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # ------------------------------------------------------------- M1: analysis
 
     @app.get("/api/jobs/{jid}/analysis")
-    async def job_analysis(jid: str, pose_index: int = Query(default=1, ge=1)):
+    def job_analysis(jid: str, pose_index: int = Query(default=1, ge=1)):
         job = runner.get_job(jid)
         if job is None:
             return _not_found("job")
@@ -503,7 +530,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # ------------------------------------------------------------- M3: diagram
 
     @app.get("/api/jobs/{jid}/diagram")
-    async def job_diagram(jid: str, pose_index: int = Query(default=1, ge=1)):
+    def job_diagram(jid: str, pose_index: int = Query(default=1, ge=1)):
         job = runner.get_job(jid)
         if job is None:
             return _not_found("job")
@@ -516,7 +543,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # ------------------------------------------------------------- M1: report
 
     @app.get("/api/jobs/{jid}/report", response_class=HTMLResponse)
-    async def job_report(
+    def job_report(
         jid: str,
         sections: str | None = Query(default=None),
         title: str | None = Query(default=None, max_length=80),
@@ -710,27 +737,55 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/api/projects/{pid}/events.jsonl", response_class=PlainTextResponse)
     async def project_events(pid: str, since: str | None = Query(default=None)):
-        if store.get(pid) is None:
+        # `_prepared` is the pseudo-project that stores receptor/ligand prep
+        # events.  It is not in the project registry, but audit needs to read it.
+        if pid != "_prepared" and store.get(pid) is None:
             return _not_found("project")
         events = list(events_for(pid).read(since=since))
         body = "\n".join(json.dumps(e, ensure_ascii=False) for e in events)
         return PlainTextResponse(body + ("\n" if body else ""), media_type="text/plain")
 
     @app.get("/api/jobs/{jid}/audit.zip")
-    async def job_audit_zip(jid: str):
+    def job_audit_zip(jid: str):
         from ..analysis.audit import build_audit_zip
 
         job = runner.get_job(jid)
         if job is None:
             return _not_found("job")
         project = store.get(job.project_id)
-        events = [
-            e
-            for e in events_for(job.project_id).read()
-            if (e.get("subject") or {}).get("id") in (job.id, job.project_id)
-            or jid in json.dumps(e.get("payload", {}))
+        related_ids = {
+            job.id,
+            job.project_id,
+            job.request.receptor_id,
+            job.request.ligand_id,
+        }
+        if job.batch_id:
+            related_ids.add(job.batch_id)
+
+        def relevant(event: dict) -> bool:
+            subject = event.get("subject") or {}
+            return subject.get("id") in related_ids or jid in json.dumps(event.get("payload", {}))
+
+        collected = [e for e in events_for(job.project_id).read() if relevant(e)] + [
+            e for e in events_for("_prepared").read() if relevant(e)
         ]
+        unique: dict[tuple, dict] = {}
+        for event in collected:
+            key = (
+                event.get("ts"),
+                event.get("action"),
+                (event.get("subject") or {}).get("kind"),
+                (event.get("subject") or {}).get("id"),
+            )
+            unique[key] = event
+        events = sorted(unique.values(), key=lambda e: str(e.get("ts", "")))
         input_hashes = _load_input_hashes(job) or _input_hashes(job)
+        receptor = registry.receptors.get(job.request.receptor_id)
+        ligand = registry.ligands.get(job.request.ligand_id)
+        prepared = {
+            "receptor": receptor.model_dump(mode="json") if receptor is not None else None,
+            "ligand": ligand.model_dump(mode="json") if ligand is not None else None,
+        }
         zip_path = store.job_dir(job.project_id, job.id) / "audit.zip"
         build_audit_zip(
             job,
@@ -739,6 +794,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             zip_path,
             project_name=(project.name if project else job.project_id),
             input_hashes=input_hashes,
+            prepared=prepared,
         )
         return Response(
             zip_path.read_bytes(),
@@ -751,7 +807,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     _DEMO_FLAG = "_demo_loaded.json"
 
     @app.get("/api/demo/example")
-    async def demo_example():
+    def demo_example():
         flag_path = registry.receptors_dir / _DEMO_FLAG
         demo_dir = Path(__file__).resolve().parent.parent / "demo_data"
         note = (
@@ -781,6 +837,32 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             registry.add_ligand(ligand)
             flag = {"receptor_id": receptor.id, "ligand_id": ligand.id}
             flag_path.write_text(json.dumps(flag), encoding="utf-8")
+            prep_events = events_for("_prepared")
+            prep_events.emit(
+                "receptor.prepared",
+                "receptor",
+                receptor.id,
+                {
+                    "filename": "1HSG.pdb",
+                    "original_sha256": sha256_file(Path(receptor.original_path)),
+                    "n_chains": len(receptor.chains),
+                    "chains": receptor.chains,
+                    "n_cocrystals": len(receptor.cocrystal_ligands),
+                    "cocrystals": [c.model_dump(mode="json") for c in receptor.cocrystal_ligands],
+                    "warnings": receptor.warnings,
+                },
+            )
+            prep_events.emit(
+                "ligand.prepared",
+                "ligand",
+                ligand.id,
+                {
+                    "source": ligand.source,
+                    "smiles": ligand.smiles,
+                    "n_rotatable": ligand.n_rotatable_bonds,
+                    "name": ligand.name,
+                },
+            )
         mk1 = next((c for c in receptor.cocrystal_ligands if c.resname == "MK1"), None)
         if mk1 is None:
             raise PreparationError("示例受体未识别到共晶配体 MK1")
@@ -833,7 +915,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return PlainTextResponse(sdf_path.read_text(encoding="utf-8", errors="replace"))
 
     @app.get("/api/jobs/{jid}/crystal_rmsd")
-    async def crystal_rmsd(jid: str, pose_index: int = Query(default=1, ge=1)):
+    def crystal_rmsd(jid: str, pose_index: int = Query(default=1, ge=1)):
         from ..models import CrystalRmsd
 
         job = runner.get_job(jid)
@@ -896,7 +978,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # ------------------------------------------------------------- M2: pockets
 
     @app.post("/api/pockets")
-    async def pockets_endpoint(body: PocketsRequest):
+    def pockets_endpoint(body: PocketsRequest):
         from ..analysis.pockets import pocket_response
 
         receptor = registry.receptors.get(body.receptor_id)
@@ -911,7 +993,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # ------------------------------------------------------------- M2: flex
 
     @app.post("/api/prepare/receptor/{rid}/flex", status_code=201)
-    async def flex_variant_endpoint(rid: str, body: FlexRequest):
+    def flex_variant_endpoint(rid: str, body: FlexRequest):
         from ..prep.receptor import prepare_flex_variant
 
         base = registry.receptors.get(rid)
@@ -941,7 +1023,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         content = await _read_upload(file)
         if not content.strip():
             raise PreparationError("库文件为空。")
-        lib = prepare_library(content, file.filename or "library.smi", registry, name)
+        lib = await asyncio.get_running_loop().run_in_executor(
+            None, prepare_library, content, file.filename or "library.smi", registry, name
+        )
         events_for("_prepared").emit(
             "library.prepared",
             "library",
@@ -968,6 +1052,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 return _error(400, f"unknown ligand_id: {ligand_id}")
         if body.receptor_id not in registry.receptors:
             return _error(400, f"unknown receptor_id: {body.receptor_id}")
+        engine = get_engine(body.engine)
+        if engine is not None:
+            if body.params.scoring not in engine.manifest.scoring_functions:
+                return _error(
+                    400,
+                    f"scoring '{body.params.scoring}' not supported by {body.engine} "
+                    f"(supported: {engine.manifest.scoring_functions})",
+                )
+            ok, reason = engine.is_available()
+            if not ok:
+                return _error(503, reason or f"engine {body.engine} is unavailable")
         summary = batches.create(pid, body)
         for ligand_id in body.ligand_ids:
             job = store.new_job(pid, job_request_from_batch(body, ligand_id), batch_id=summary.id)
@@ -1088,7 +1183,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
 
 def main() -> None:
+    from ..core.lifecycle import acquire_single_instance_lock
+
+    settings = get_settings()
+    if not acquire_single_instance_lock(settings.data_dir):
+        print(
+            "DockStudio backend is already running for this data directory; "
+            "reusing the existing instance.",
+            file=sys.stderr,
+        )
+        return
+    # Started from the FastAPI lifespan, after all application imports complete.
+    os.environ["DOCKSTUDIO_ENABLE_WATCHDOG"] = "1"
     uvicorn.run("dockstudio.api.app:create_app", factory=True, host="127.0.0.1", port=8000)
-
-
-app = create_app()

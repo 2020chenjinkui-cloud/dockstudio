@@ -118,12 +118,15 @@ def build_audit_zip(
     include_files: dict[str, Path] | None = None,
     project_name: str = "",
     input_hashes: dict | None = None,
+    prepared: dict | None = None,
 ) -> Path:
     """Pack snapshot.json + events.jsonl + engine.log + artifacts + report.md."""
     snapshot = {
         "job": json.loads(job.model_dump_json()),
         "inputs": input_hashes or {},
     }
+    if prepared:
+        snapshot["prepared"] = prepared
     report_md = build_audit_markdown(job, events, input_hashes, project_name)
     job_dir = Path(job.result.run_dir) if job.result else None
 

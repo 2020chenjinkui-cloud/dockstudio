@@ -112,3 +112,17 @@ def test_projects_404_and_soft_delete(client) -> None:
     assert client.delete(f"/api/projects/{pid}").status_code == 204
     assert client.get(f"/api/projects/{pid}").status_code == 404
     assert client.delete(f"/api/projects/{pid}").status_code == 404
+
+
+def test_submit_job_rejects_unknown_receptor_or_ligand(client) -> None:
+    pid = client.post("/api/projects", json={"name": "validation"}).json()["id"]
+    body = {
+        "engine": "vina",
+        "receptor_id": "deadbeef",
+        "ligand_id": "deadbeef",
+        "box": {"center": [0, 0, 0], "size": [20, 20, 20]},
+        "params": {},
+    }
+    resp = client.post(f"/api/projects/{pid}/jobs", json=body)
+    assert resp.status_code == 400
+    assert "receptor_id" in resp.json()["detail"]

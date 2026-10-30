@@ -1,5 +1,61 @@
 """DockStudio backend package."""
 
+import os
+import shutil
+import tempfile
+from pathlib import Path
+
+
+def _ensure_ascii_rdkit_data() -> None:
+    """Point RDBASE at an ASCII copy of rdkit/Data when the install path is not ASCII.
+
+    RDKit's C++ code opens ``BaseFeatures.fdef`` with a narrow-char path.  On Windows
+    profiles such as ``C:\\Users\\灰灰\\...`` the open fails and PoseBusters (and any
+    chemical-feature consumer) becomes silently unavailable.  Copy the tiny Data
+    directory (about 2 MB) to an ASCII location and set RDBASE *before* rdkit is
+    imported, because RDConfig reads RDBASE at import time.
+    """
+    if os.environ.get("RDBASE"):
+        return
+    try:
+        import importlib.util
+
+        spec = importlib.util.find_spec("rdkit")
+    except Exception:  # noqa: BLE001
+        return
+    if spec is None or not spec.origin:
+        return
+    data_dir = Path(spec.origin).resolve().parent / "Data"
+    if not data_dir.is_dir():
+        return
+    if all(ord(ch) < 128 for ch in str(data_dir)):
+        return
+
+    bases = [
+        os.environ.get("PUBLIC"),
+        os.environ.get("PROGRAMDATA"),
+        tempfile.gettempdir(),
+    ]
+    for base in bases:
+        if not base:
+            continue
+        target = Path(base) / "DockStudio" / "rdkit-data"
+        if not all(ord(ch) < 128 for ch in str(target)):
+            continue
+        try:
+            target.mkdir(parents=True, exist_ok=True)
+            probe = target / "Data" / "BaseFeatures.fdef"
+            if not probe.is_file():
+                shutil.copytree(data_dir, target / "Data", dirs_exist_ok=True)
+            if probe.is_file():
+                os.environ["RDBASE"] = str(target)
+                return
+        except OSError:
+            continue
+
+
+_ensure_ascii_rdkit_data()
+
 # Linux manylinux wheels 的 ABI 冲突防护（实测：ubuntu CI / docker-slim 会段错误，
 # Windows wheels 无此问题）：
 # 1. openbabel 必须先于 rdkit 加载会段错误 → 包入口强制先加载 rdkit；
@@ -31,4 +87,4 @@ def _optional_preload() -> None:
 
 _optional_preload()
 
-__version__ = "2.0.4"
+__version__ = "2.0.5"

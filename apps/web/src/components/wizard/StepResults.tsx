@@ -437,7 +437,12 @@ export default function StepResults({ jobId, job, onJobUpdate }: StepResultsProp
 }
 
 interface PoseRowProps {
-  pose: { index: number; affinity: number; rmsd_lb: number; rmsd_ub: number };
+  pose: {
+    index: number;
+    affinity: number;
+    rmsd_lb: number | null;
+    rmsd_ub: number | null;
+  };
   analysis: PoseAnalysis | undefined;
   ai: AiRescoreResult | undefined;
   crystal: CrystalRmsd | undefined;
@@ -484,7 +489,9 @@ function PoseRow({
         {ai ? `${(ai.binder_probability * 100).toFixed(1)}%` : '—'}
       </td>
       <td>
-        {pose.rmsd_lb.toFixed(1)} – {pose.rmsd_ub.toFixed(1)}
+        {pose.rmsd_lb !== null && pose.rmsd_ub !== null
+          ? `${pose.rmsd_lb.toFixed(1)} – ${pose.rmsd_ub.toFixed(1)}`
+          : '—'}
       </td>
       <td>
         <CrystalRmsdCell rmsd={crystal?.rmsd ?? null} />

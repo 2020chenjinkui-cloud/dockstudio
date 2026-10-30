@@ -4,6 +4,7 @@
 换来的是桌面安装包只带一个后端文件。
 """
 
+import sys
 from pathlib import Path
 
 from PyInstaller.utils.hooks import collect_all, collect_data_files
@@ -16,6 +17,7 @@ _ob_datas, _ob_binaries, _ob_hiddenimports = collect_all("openbabel")
 _rdkit_datas = collect_data_files("rdkit")
 _meeko_datas = collect_data_files("meeko")
 _gemmi_datas = collect_data_files("gemmi")
+_posebusters_datas = collect_data_files("posebusters")
 
 import importlib.util as _ilu
 
@@ -35,16 +37,23 @@ a = Analysis(
         (str(ROOT / "resources" / "bin"), "resources/bin"),
         # 内置演示项目数据（1HSG 受体/配体/SMILES），冻结包里缺了 /api/demo/example 直接 500
         (str(ROOT / "server" / "dockstudio" / "demo_data"), "dockstudio/demo_data"),
+        # Linux 上 PLIP 仍走隔离子进程；worker 是被按路径执行的脚本，必须作为 data 收集
+        (
+            str(ROOT / "server" / "dockstudio" / "analysis" / "plip_worker.py"),
+            "dockstudio/analysis",
+        ),
     ]
     + _ob_datas
     + _rdkit_datas
     + _meeko_datas
     + _gemmi_datas
+    + _posebusters_datas
     + _ob_explicit_datas,
     hiddenimports=[
         "rdkit",
         "rdkit.Chem.AllChem",
         "meeko",
+        "meeko.cli.mk_prepare_receptor",
         "openbabel",
         "scipy.spatial",
         "gemmi",
@@ -53,7 +62,10 @@ a = Analysis(
     ]
     + _ob_hiddenimports,
     hookspath=[],
-    runtime_hooks=[str(ROOT / "scripts" / "pyi_obabel_hook.py")],
+    runtime_hooks=[
+        str(ROOT / "scripts" / "pyi_rdkit_data_hook.py"),
+        str(ROOT / "scripts" / "pyi_obabel_hook.py"),
+    ],
     excludes=["tkinter", "matplotlib"],
     cipher=block_cipher,
     noarchive=False,
@@ -73,5 +85,12 @@ exe = EXE(
     strip=False,
     upx=False,
     console=False,
-    icon=str(ROOT / "apps" / "desktop" / "src-tauri" / "icons" / "icon.ico"),
+    icon=str(
+        ROOT
+        / "apps"
+        / "desktop"
+        / "src-tauri"
+        / "icons"
+        / ("icon.icns" if sys.platform == "darwin" else "icon.ico")
+    ),
 )

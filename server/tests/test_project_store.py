@@ -40,7 +40,7 @@ def test_soft_delete(settings) -> None:
 def test_detail_aggregates_jobs(settings) -> None:
     store = ProjectStore(settings)
     p = store.create("proj")
-    job = store.new_job(p.id, _request())
+    job = store.new_job(p.id, _request(), batch_id="batch123")
     job.status = JobStatus.completed
     store.save_job(job)
     detail = store.detail(p.id)
@@ -50,6 +50,7 @@ def test_detail_aggregates_jobs(settings) -> None:
     assert summary["id"] == job.id
     assert summary["status"] == "completed"
     assert summary["ligand_id"] == "lig1"
+    assert summary["batch_id"] == "batch123"
     assert summary["top_affinity"] is None
 
 

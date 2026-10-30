@@ -72,6 +72,22 @@ def test_gnina_cmd_excludes_energy_range() -> None:
     assert cmd[cmd.index("--exhaustiveness") + 1] == "8"
 
 
+def test_gnina_cpu_opt_in_flag(monkeypatch) -> None:
+    from dockstudio.engines.gnina import GninaEngine
+
+    monkeypatch.setenv("DOCKSTUDIO_GNINA_CPU", "1")
+    eng = GninaEngine()
+    cmd = eng._build_cmd(
+        "gnina",
+        Box(center=(0, 0, 0), size=(20, 20, 20)),
+        DockParams(exhaustiveness=1),
+        "r",
+        "l",
+        "o",
+    )
+    assert "--no_gpu" in cmd
+
+
 GNINA_OUT = textwrap.dedent(
     """\
     MODEL 1

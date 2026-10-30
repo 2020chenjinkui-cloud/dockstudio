@@ -10,6 +10,7 @@ import re
 import shutil
 from pathlib import Path
 
+from ..config import bundled_engine_binary
 from ..models import DockingError, EngineUnavailableError, Pose
 from .base import EngineManifest
 from .vina import VinaEngine, _key_lines
@@ -80,11 +81,9 @@ class SminaEngine(VinaEngine):
         found = shutil.which("smina")
         if found:
             return Path(found)
-        root = Path(__file__).resolve().parents[3]
-        for name in ("windows", "linux-x86_64", "linux-aarch64", "mac-x86_64", "mac-aarch64"):
-            candidate = root / "resources" / "bin" / name / exe
-            if candidate.is_file():
-                return candidate
+        bundled = bundled_engine_binary(exe)
+        if bundled is not None:
+            return bundled
         raise EngineUnavailableError(
             "smina 二进制未找到：请设置 DOCKSTUDIO_SMINA 环境变量或将其放入 resources/bin。<br>"
             "smina is not available: set DOCKSTUDIO_SMINA or place the binary under resources/bin"

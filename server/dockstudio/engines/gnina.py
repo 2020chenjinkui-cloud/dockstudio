@@ -12,6 +12,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
+from ..config import bundled_engine_binary
 from ..models import DockingError, EngineUnavailableError, Pose
 from .base import EngineManifest
 from .vina import VinaEngine, _key_lines
@@ -66,9 +67,9 @@ class GninaEngine(VinaEngine):
         found = shutil.which(exe)
         if found:
             return Path(found)
-        candidate = Path(__file__).resolve().parents[3] / "resources" / "bin" / "linux-x86_64" / exe
-        if candidate.is_file():
-            return candidate
+        bundled = bundled_engine_binary(exe)
+        if bundled is not None:
+            return bundled
         raise EngineUnavailableError(
             "gnina 二进制未找到：设置 DOCKSTUDIO_GNINA 或放入 resources/bin/linux-x86_64。"
         )
@@ -90,7 +91,9 @@ class GninaEngine(VinaEngine):
             for libdir in ("/usr/lib/x86_64-linux-gnu", "/usr/lib64", "/usr/local/cuda/lib64"):
                 if (Path(libdir) / candidate).exists():
                     return True, ""
-        return False, "检测到 gnina 但无 NVIDIA GPU，可用 --no_gpu 强制 CPU（极慢）"
+        return False, (
+            "检测到 gnina 但无 NVIDIA GPU；设置 DOCKSTUDIO_GNINA_CPU=1 可强制 CPU（--no_gpu，极慢）"
+        )
 
     def is_available(self) -> tuple[bool, str | None]:
         try:
@@ -99,7 +102,7 @@ class GninaEngine(VinaEngine):
         except EngineUnavailableError as exc:
             return False, str(exc)
         ok, reason = self._gpu_ok()
-        if not ok:
+        if not ok and os.environ.get("DOCKSTUDIO_GNINA_CPU") != "1":
             return False, reason
         return True, None
 
@@ -117,6 +120,8 @@ class GninaEngine(VinaEngine):
         if "--energy_range" in cmd:
             i = cmd.index("--energy_range")
             del cmd[i : i + 2]
+        if os.environ.get("DOCKSTUDIO_GNINA_CPU") == "1":
+            cmd.append("--no_gpu")
         return cmd
 
     def _parse_poses(self, out_path: Path, run_log: str) -> list[Pose]:

@@ -36,6 +36,9 @@ def test_flex_variant_build(base_receptor, tmp_path) -> None:
     assert Path(variant.pdbqt_path).is_file()
     flex_text = Path(variant.flex_pdbqt_path).read_text(encoding="utf-8")
     assert "BEGIN_RES" in flex_text  # flexible residue branch marker
+    # analysis/report endpoints need the protein PDB in the variant directory
+    assert (Path(variant.pdbqt_path).parent / "receptor_protein.pdb").is_file()
+    assert (Path(variant.pdbqt_path).parent / "cocrystals.json").is_file()
 
 
 def test_flex_validation_errors(base_receptor, tmp_path) -> None:

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "dockstudio"
-version = "2.0.4"
+version = "2.0.5"
 description = "Cross-platform molecular docking platform"
 requires-python = ">=3.10"
 dependencies = [
@@ -52,7 +52,7 @@ target-version = "py310"
 [tool.ruff.lint]
 # 项目策略：桌面单机应用，时间戳一律用本地朴素时间（datetime.now()），
 # 事件审计场景下 ISO 时间由 events.py 显式 UTC 化处理。
-ignore = ["DTZ005"]
+ignore = ["DTZ005", "EXE002"]
 
 [tool.ruff.lint.per-file-ignores]
 # frozen groundwork file, kept verbatim per project constraint

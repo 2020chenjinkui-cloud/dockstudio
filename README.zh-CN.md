@@ -113,8 +113,8 @@ docs/        开发文档：API 契约、审计包规范、SDK、部署、AI age
 
 ## 测试与质控
 
-- **112 个后端测试**（pytest，含真实 Vina 端到端）+ ruff 静态检查
-- **97 个前端测试**
+- **123 个后端测试**（pytest，含真实 Vina 端到端）+ ruff 静态检查
+- **98 个前端测试**
 - **10 个共晶靶点金标准重对接回归**（自托管 CI 每周自动跑）
 - 安装包实测：Windows NSIS 静默安装、Linux 实体机 DEB/AppImage 安装验证
 - CI：GitHub Actions（win/mac 走托管 runner，Linux 构建与 GPU 相关 job 走自托管 runner）

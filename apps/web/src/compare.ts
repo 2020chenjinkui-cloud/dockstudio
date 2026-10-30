@@ -10,8 +10,14 @@ export function bestAffinity(rows: ComparisonRow[]): number | null {
   return Math.min(...values);
 }
 
+function sanitizeCsvCell(value: string): string {
+  // Prevent spreadsheet formula/DDE injection when the export is opened in Excel.
+  return /^[=+\-@\t\r]/.test(value) ? `'${value}` : value;
+}
+
 function escCsv(value: string): string {
-  return /[",\n]/.test(value) ? `"${value.replace(/"/g, '""')}"` : value;
+  const safe = sanitizeCsvCell(value);
+  return /[",\n]/.test(safe) ? `"${safe.replace(/"/g, '""')}"` : safe;
 }
 
 export function toCompareCsv(rows: ComparisonRow[]): string {

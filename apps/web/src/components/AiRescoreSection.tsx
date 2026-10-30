@@ -146,6 +146,7 @@ export default function AiRescoreSection({ jobId, poseCount, onTasks }: AiRescor
       {latestWithResults?.msa_server_used && (
         <p className="ai-warn">{t('ai.msaWarnHistory')}</p>
       )}
+      {latestWithResults && <p className="muted">{t('ai.ligandScope')}</p>}
 
       {tasks.length > 0 && (
         <details className="ai-history" open={tasks.some((x) => !isTerminalStatus(x.status))}>

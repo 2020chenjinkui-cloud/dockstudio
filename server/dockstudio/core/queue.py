@@ -76,7 +76,9 @@ class JobRunner:
         self._jobs: dict[str, Job] = {}
         self._cancel_requested: set[str] = set()
         self._worker_task: asyncio.Task | None = None
-        self._registry_lock = threading.Lock()
+        self._engine_lock = threading.Lock()
+        self._active_engine: object | None = None
+        self._active_job_id: str | None = None
 
     # ------------------------------------------------------------- enqueue
 
@@ -102,14 +104,26 @@ class JobRunner:
             return job
         if job.status == JobStatus.running:
             self._cancel_requested.add(job_id)
-            engine = get_engine(job.request.engine)
-            if engine is not None:
-                try:
-                    engine.cancel_current()
-                except Exception as exc:  # noqa: BLE001
-                    log.warning("engine cancel_current failed: %s", exc)
+            with self._engine_lock:
+                engine = self._active_engine if self._active_job_id == job_id else None
+            if engine is None:
+                # The worker has not reached engine.dock() yet; the flag is
+                # checked before launching and will cancel at that point.
+                return job
+            try:
+                engine.cancel_current()  # type: ignore[attr-defined]
+            except Exception as exc:  # noqa: BLE001
+                log.warning("engine cancel_current failed: %s", exc)
             return job
         return job
+
+    def _mark_canceled(self, job: Job) -> None:
+        job.status = JobStatus.canceled
+        job.progress.message = "已取消"
+        job.finished_at = datetime.now()
+        self.store.save_job(job)
+        self._emit_finished(job)
+        self._lifecycle(job, "job.canceled", {})
 
     # ------------------------------------------------------------- worker
 
@@ -195,60 +209,57 @@ class JobRunner:
                 )
             flex_path = Path(flex_pdbqt)
 
-        def heartbeat(lines: int) -> None:
-            percent = min(5.0 + lines * 0.5, 85.0)
-            self._set_progress(job, "docking", percent, f"vina 输出 {lines} 行")
-
+        with self._engine_lock:
+            self._active_engine = engine
+            self._active_job_id = job.id
         try:
-            result = await loop.run_in_executor(
-                None,
-                lambda: engine.dock(
-                    Path(receptor.pdbqt_path),
-                    Path(ligand.pdbqt_path),
-                    job.request.box,
-                    job.request.params,
-                    run_dir,
-                    flex_path,
-                ),
-            )
-        except DockStudioError:
-            raise
-        except Exception as exc:
             if job.id in self._cancel_requested:
-                job.status = JobStatus.canceled
-                job.progress.message = "已取消"
-                job.finished_at = datetime.now()
-                self.store.save_job(job)
-                self._emit_finished(job)
-                self._lifecycle(job, "job.canceled", {})
+                self._mark_canceled(job)
                 return
-            raise PreparationError(f"dock crashed: {exc}") from exc
+            try:
+                result = await loop.run_in_executor(
+                    None,
+                    lambda: engine.dock(
+                        Path(receptor.pdbqt_path),
+                        Path(ligand.pdbqt_path),
+                        job.request.box,
+                        job.request.params,
+                        run_dir,
+                        flex_path,
+                    ),
+                )
+            except DockStudioError:
+                if job.id in self._cancel_requested:
+                    self._mark_canceled(job)
+                    return
+                raise
+            except Exception as exc:
+                if job.id in self._cancel_requested:
+                    self._mark_canceled(job)
+                    return
+                raise PreparationError(f"dock crashed: {exc}") from exc
+        finally:
+            with self._engine_lock:
+                if self._active_job_id == job.id:
+                    self._active_engine = None
+                    self._active_job_id = None
 
         if job.id in self._cancel_requested:
-            job.status = JobStatus.canceled
-            job.progress.message = "已取消"
-            job.finished_at = datetime.now()
-            self.store.save_job(job)
-            self._emit_finished(job)
-            self._lifecycle(job, "job.canceled", {})
+            self._mark_canceled(job)
             return
 
         result.run_dir = str(run_dir)
         self._set_progress(job, "exporting", 88.0, "导出姿态")
         self.store.save_job(job)
-        heartbeat_stop = threading.Event()
-        heartbeat_thread = threading.Thread(
-            target=self._log_heartbeat, args=(job, heartbeat_stop), daemon=True
+        pose_paths = await loop.run_in_executor(
+            None, lambda: export_poses(run_dir / "out.pdbqt", run_dir)
         )
-        try:
-            heartbeat_thread.start()
-            pose_paths = await loop.run_in_executor(
-                None, lambda: export_poses(run_dir / "out.pdbqt", run_dir)
-            )
-        finally:
-            heartbeat_stop.set()
         for pose, pose_path in zip(result.poses, pose_paths, strict=False):
             pose.file = str(pose_path)
+
+        if job.id in self._cancel_requested:
+            self._mark_canceled(job)
+            return
 
         self._set_progress(job, "analyzing", 95.0, "分析相互作用")
         self.store.save_job(job)
@@ -273,19 +284,6 @@ class JobRunner:
             len(result.poses),
             result.poses[0].affinity if result.poses else float("nan"),
         )
-
-    def _log_heartbeat(self, job: Job, stop: threading.Event) -> None:
-        out_path = self.store.job_dir(job.project_id, job.id) / "out.pdbqt"
-        while not stop.wait(5.0):
-            try:
-                lines = (
-                    len(out_path.read_text(encoding="utf-8", errors="replace").splitlines())
-                    if out_path.is_file()
-                    else 0
-                )
-            except OSError:
-                lines = 0
-            self._set_progress(job, job.progress.stage, None, f"处理中（输出 {lines} 行）")
 
     # ------------------------------------------------------------- helpers
 

@@ -84,4 +84,9 @@ describe('toCompareCsv', () => {
     expect(line3).toContain('j3');
     expect(line3).toContain(',,0,failed');
   });
+
+  it('公式注入单元格加单引号前缀', () => {
+    const csv = toCompareCsv([{ ...ROWS[0], ligand_name: '=cmd|calc' }]);
+    expect(csv).toContain("'=cmd|calc");
+  });
 });

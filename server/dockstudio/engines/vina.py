@@ -39,7 +39,9 @@ _ERROR_KB: list[tuple[re.Pattern[str], str]] = [
     ),
     (
         re.compile(
-            r"grid|outside the box|search space is too|too large|box.*exceed", re.IGNORECASE
+            r"search space is too|outside the search space|grid (?:size|spacing).*too|"
+            r"box.*exceed|too large",
+            re.IGNORECASE,
         ),
         "搜索盒设置超限：请缩小 box 尺寸（建议各边 ≤ 30 Å）或将盒子中心移到结合位点。",
     ),

@@ -74,8 +74,8 @@ def pose_files(tmp_path_factory, indinavir_smiles: str, hsg_pdb_bytes: bytes):
 def test_clashing_pose_is_error(tmp_path: Path) -> None:
     sdf = tmp_path / "pose_1.sdf"
     sdf.write_text(_CLASHING_SDF, encoding="utf-8")
-    check = check_pose(sdf)
-    assert check.source in ("builtin", "posebusters")
+    check = check_pose(sdf, use_posebusters=False)
+    assert check.source == "builtin"
     assert not check.ok
     assert any(i.severity == "error" for i in check.issues)
     assert any("碰撞" in i.message or i.rule == "clash" for i in check.issues)
@@ -84,7 +84,9 @@ def test_clashing_pose_is_error(tmp_path: Path) -> None:
 def test_valid_sdf_ok(tmp_path: Path) -> None:
     sdf = tmp_path / "pose_1.sdf"
     sdf.write_text(_SMALL_SDF, encoding="utf-8")
-    check = check_pose(sdf, box=Box(center=(0.6, 0.5, 0.0), size=(20, 20, 20)))
+    check = check_pose(
+        sdf, box=Box(center=(0.6, 0.5, 0.0), size=(20, 20, 20)), use_posebusters=False
+    )
     assert check.ok
     assert check.issues == []
 
@@ -96,7 +98,7 @@ def test_out_of_box_warning(tmp_path: Path) -> None:
         "   50.0000   50.0000   50.0000 C   0  0\nM  END\n$$$$\n",
         encoding="utf-8",
     )
-    check = check_pose(sdf, box=Box(center=(0, 0, 0), size=(20, 20, 20)))
+    check = check_pose(sdf, box=Box(center=(0, 0, 0), size=(20, 20, 20)), use_posebusters=False)
     assert any(i.rule == "out_of_box" and i.severity == "warning" for i in check.issues)
     assert check.ok  # warning only, not an error
     assert check.pose_index == 2

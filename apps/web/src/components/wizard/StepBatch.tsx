@@ -1,16 +1,18 @@
 import { useEffect, useRef, useState } from 'react';
 import { cancelBatch, createBatch, subscribeBatch } from '../../api';
-import { useI18n } from '../../i18n';
-import type { BatchSummary, EngineManifest } from '../../types';
-import Tooltip from '../Tooltip';
+import type { BatchSummary, DockParams, EngineManifest } from '../../types';
 import BatchPanel from './BatchPanel';
+import ParamsPanel from './ParamsPanel';
 import type { WizardData } from './Wizard';
 
 interface StepBatchProps {
   projectId: string;
   data: WizardData;
   engines: EngineManifest[];
+  advanced: boolean;
   onBatchId: (batchId: string) => void;
+  onParamsChange: (params: DockParams) => void;
+  onEngineChange: (engine: string) => void;
   onOpenJob: (jobId: string) => void;
   onTerminal: (summary: BatchSummary) => void;
 }
@@ -19,11 +21,13 @@ export default function StepBatch({
   projectId,
   data,
   engines,
+  advanced,
   onBatchId,
+  onParamsChange,
+  onEngineChange,
   onOpenJob,
   onTerminal,
 }: StepBatchProps) {
-  const { t } = useI18n();
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [batchName, setBatchName] = useState('');
@@ -54,10 +58,9 @@ export default function StepBatch({
     setSubmitting(true);
     setSubmitError(null);
     try {
-      const engine = engines.find((e) => e.available)?.name ?? 'vina';
       const res = await createBatch(projectId, {
         name: batchName.trim() || undefined,
-        engine,
+        engine: data.engine,
         receptor_id: data.receptor.id,
         ligand_ids: data.batchLigandIds,
         box: data.box,
@@ -89,10 +92,14 @@ export default function StepBatch({
           <dt>配体数</dt>
           <dd>{data.batchLigandIds.length}</dd>
         </dl>
-        <div className="control-row">
-          <span>批量参数沿用上方参数卡（exhaustiveness {data.params.exhaustiveness} / num_modes {data.params.num_modes} / scoring {data.params.scoring}）</span>
-          <Tooltip text={t('help.exhaustiveness')} />
-        </div>
+        <ParamsPanel
+          params={data.params}
+          engines={engines}
+          engine={data.engine}
+          advanced={advanced}
+          onEngineChange={onEngineChange}
+          onParamsChange={onParamsChange}
+        />
         <input
           type="text"
           placeholder="批次名称（可选）"

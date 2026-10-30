@@ -52,7 +52,7 @@ def _gen(tmp_path: Path, pose_analyses=None, **kwargs) -> str:
 
 def test_sections_scores_disclaimer_only(tmp_path: Path) -> None:
     page = _gen(tmp_path, sections=["scores", "disclaimer"])
-    assert "$3Dmol" not in page and "3Dmol-min.js" not in page.lower()
+    assert "$3Dmol" not in page and "3dmol-min.js" not in page.lower()
     assert "姿态打分" in page
     assert "免责声明" in page
     assert "任务快照" not in page

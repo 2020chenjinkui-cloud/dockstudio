@@ -126,6 +126,26 @@ def test_project_events_endpoint(client, monkeypatch) -> None:
     assert later == ""
 
 
+def test_prepared_events_endpoint(client, hsg_pdb_bytes: bytes, indinavir_smiles: str) -> None:
+    assert (
+        client.post(
+            "/api/prepare/receptor", files={"file": ("1HSG.pdb", hsg_pdb_bytes)}
+        ).status_code
+        == 200
+    )
+    assert (
+        client.post(
+            "/api/prepare/ligand", data={"smiles": indinavir_smiles, "name": "indinavir"}
+        ).status_code
+        == 200
+    )
+    resp = client.get("/api/projects/_prepared/events.jsonl")
+    assert resp.status_code == 200
+    actions = [json.loads(line)["action"] for line in resp.text.splitlines() if line]
+    assert "receptor.prepared" in actions
+    assert "ligand.prepared" in actions
+
+
 def test_job_env_captured(client, monkeypatch) -> None:
     jid, *_ = _seed(client, monkeypatch)
     j = client.get(f"/api/jobs/{jid}").json()

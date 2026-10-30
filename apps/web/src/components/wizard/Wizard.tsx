@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { getBatch, getJob } from '../../api';
+import { defaultDockCpu } from '../../defaults';
 import { useI18n } from '../../i18n';
 import type {
   BatchSummary,
@@ -23,6 +24,7 @@ export type WizardMode = 'single' | 'batch';
 
 export interface WizardData {
   mode: WizardMode;
+  engine: string;
   receptor: PreparedReceptor | null;
   ligand: PreparedLigand | null;
   batchLigandIds: string[];
@@ -35,6 +37,7 @@ export interface WizardData {
 
 const DEFAULT_DATA: WizardData = {
   mode: 'single',
+  engine: 'vina',
   receptor: null,
   ligand: null,
   batchLigandIds: [],
@@ -46,7 +49,7 @@ const DEFAULT_DATA: WizardData = {
     exhaustiveness: 8,
     num_modes: 9,
     energy_range: 3.0,
-    cpu: 1,
+    cpu: defaultDockCpu(),
     seed: null,
     scoring: 'vina',
   },
@@ -99,6 +102,13 @@ export default function Wizard({
   }, []);
 
   const onJobUpdate = useCallback((j: Job) => setJob(j), []);
+
+  const resetRun = useCallback(() => {
+    patch({ jobId: null, batchId: null });
+    setJob(null);
+    setBatchSummary(null);
+    setStep(4);
+  }, [patch]);
 
   useEffect(() => {
     if (!resumeJobId) return;
@@ -238,17 +248,22 @@ export default function Wizard({
               advanced={advanced}
               engines={engines}
               onParamsChange={(params) => patch({ params })}
+              onEngineChange={(engine) => patch({ engine })}
               onFlexText={(flexText) => patch({ flexText })}
               onJobId={(jobId) => patch({ jobId })}
               onJobUpdate={onJobUpdate}
               onCompleted={() => setStep(5)}
+              onReset={resetRun}
             />
           ) : (
             <StepBatch
               projectId={projectId}
               data={data}
               engines={engines}
+              advanced={advanced}
               onBatchId={(batchId) => patch({ batchId })}
+              onParamsChange={(params) => patch({ params })}
+              onEngineChange={(engine) => patch({ engine })}
               onOpenJob={onOpenJob}
               onTerminal={(s) => {
                 setBatchSummary(s);
@@ -288,6 +303,11 @@ export default function Wizard({
             onClick={() => setStep(step + 1)}
           >
             {t('nav.next')}
+          </button>
+        )}
+        {step === 5 && (
+          <button className="primary" onClick={resetRun}>
+            {t('nav.newRun')}
           </button>
         )}
       </div>

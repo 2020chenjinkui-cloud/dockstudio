@@ -22,6 +22,7 @@ def _recv_json_bounded(ws, timeout: float = 5.0):
 
 
 import dockstudio.core.queue as queue_mod
+from dockstudio.core.batch import _csv_safe
 from dockstudio.core.orchestrator import PrepareRegistry
 from dockstudio.engines.base import EngineManifest
 from dockstudio.models import (
@@ -185,6 +186,12 @@ def test_batch_404(client) -> None:
     assert client.post("/api/batches/nope0000/cancel").status_code == 404
     assert client.get("/api/batches/nope0000/results").status_code == 404
     assert client.get("/api/batches/nope0000/results.csv").status_code == 404
+
+
+def test_csv_formula_injection_is_neutralized() -> None:
+    assert _csv_safe("=cmd|' /C calc'!A0").startswith("'=")
+    assert _csv_safe("+SUM(1,2)").startswith("'+")
+    assert _csv_safe("normal ligand") == "normal ligand"
 
 
 def test_batch_ws_events(client, monkeypatch) -> None:

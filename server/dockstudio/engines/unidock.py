@@ -10,6 +10,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
+from ..config import bundled_engine_binary
 from ..models import Box, DockParams, EngineUnavailableError
 from .base import EngineManifest
 from .vina import VinaEngine
@@ -40,11 +41,9 @@ class UniDockEngine(VinaEngine):
         found = shutil.which("unidock")
         if found:
             return Path(found)
-        candidate = (
-            Path(__file__).resolve().parents[3] / "resources" / "bin" / "linux-x86_64" / "unidock"
-        )
-        if candidate.is_file():
-            return candidate
+        bundled = bundled_engine_binary("unidock")
+        if bundled is not None:
+            return bundled
         raise EngineUnavailableError(
             "Uni-Dock 二进制未找到：设置 DOCKSTUDIO_UNIDOCK 或放入 resources/bin/linux-x86_64。"
         )

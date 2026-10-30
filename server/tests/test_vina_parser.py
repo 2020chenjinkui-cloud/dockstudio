@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from dockstudio.engines.vina import parse_vina_out
+from dockstudio.engines.vina import annotate_error, parse_vina_out
 from dockstudio.models import DockingError
 
 SAMPLE = """\
@@ -47,3 +47,14 @@ def test_no_poses_raises(tmp_path: Path) -> None:
     out.write_text("garbage\n", encoding="utf-8")
     with pytest.raises(DockingError):
         parse_vina_out(out)
+
+
+def test_normal_vina_grid_output_is_not_a_box_error() -> None:
+    normal = (
+        "Grid center: X 13.073 Y 22.467 Z 5.557\n"
+        "Grid size  : X 22.5 Y 22.5 Z 22.5\n"
+        "Computing Vina grid ... done.\n"
+        "Performing docking (random seed: 42) ...\n"
+    )
+    assert annotate_error(normal) == ""
+    assert "搜索盒" in annotate_error("ERROR: search space is too large")

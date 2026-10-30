@@ -102,3 +102,33 @@ def test_report_contains_key_fields(tmp_path: Path) -> None:
 
     # inlined structure data present (json-escaped into the script)
     assert "receptorPDB" in page and "poseSDF" in page
+    from dockstudio import __version__
+
+    assert f"DockStudio v{__version__}" in page
+
+
+def test_report_neutralizes_script_breakout(tmp_path: Path) -> None:
+    receptor_pdb = tmp_path / "rec.pdb"
+    receptor_pdb.write_text(
+        "REMARK </script><script>alert('XSS')</script>\n"
+        "ATOM      1  CA  ALA A   1       1.0   2.0   3.0  1.00  0.00           C\nEND\n",
+        encoding="utf-8",
+    )
+    pose_sdf = tmp_path / "pose_1.sdf"
+    pose_sdf.write_text("test\n  DockStudio\n\n  0  0  0\nM  END\n$$$$\n", encoding="utf-8")
+    page = generate_report(
+        project=Project(id="p1", name="x", path=str(tmp_path), created_at=datetime.now()),
+        request=DockJobRequest(
+            receptor_id="r",
+            ligand_id="l",
+            box=Box(center=(0, 0, 0), size=(1, 1, 1)),
+        ),
+        result=_sample_result(),
+        pose_analyses=[],
+        receptor_pdb_path=receptor_pdb,
+        pose_sdf_paths=[pose_sdf],
+        receptor_name="r",
+        ligand_name="l",
+    )
+    assert "</script><script>alert" not in page
+    assert "<\\/script>" in page

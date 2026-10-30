@@ -5,6 +5,7 @@ import CliCard from './components/CliCard';
 import LigandCard from './components/LigandCard';
 import ReceptorCard from './components/ReceptorCard';
 import MolViewer, { type ViewerPose } from './MolViewerLazy';
+import { defaultDockCpu } from './defaults';
 import type {
   DockBox,
   DockParams,
@@ -20,7 +21,7 @@ const DEFAULT_PARAMS: DockParams = {
   exhaustiveness: 8,
   num_modes: 9,
   energy_range: 3.0,
-  cpu: 1,
+  cpu: defaultDockCpu(),
   seed: null,
   scoring: 'vina',
 };
@@ -33,6 +34,7 @@ export default function DebugPage() {
   const [ligand, setLigand] = useState<PreparedLigand | null>(null);
   const [box, setBox] = useState<DockBox>(DEFAULT_BOX);
   const [params, setParams] = useState<DockParams>(DEFAULT_PARAMS);
+  const [engine, setEngine] = useState('vina');
   const [docking, setDocking] = useState(false);
   const [elapsed, setElapsed] = useState<number | null>(null);
   const [result, setResult] = useState<DockResult | null>(null);
@@ -68,9 +70,10 @@ export default function DebugPage() {
     };
   }, [receptor]);
 
+  const selectedEngine = engines.find((item) => item.name === engine);
   const scoringOptions = useMemo(
-    () => [...new Set(engines.filter((e) => e.available).flatMap((e) => e.scoring_functions))],
-    [engines],
+    () => selectedEngine?.scoring_functions ?? ['vina'],
+    [selectedEngine],
   );
 
   const viewerPoses: ViewerPose[] = useMemo(() => {
@@ -94,7 +97,6 @@ export default function DebugPage() {
     setSelectedPose(null);
     const t0 = performance.now();
     try {
-      const engine = engines.find((e) => e.available)?.name ?? 'vina';
       const request: DockRequest = {
         engine,
         receptor_id: receptor.id,
@@ -158,6 +160,21 @@ export default function DebugPage() {
             onParamsChange={setParams}
           />
           <section className="card run-card">
+            <label className="control-row">
+              引擎
+              <select value={engine} onChange={(e) => setEngine(e.target.value)}>
+                {engines.length === 0 ? (
+                  <option value={engine}>{engine}</option>
+                ) : (
+                  engines.map((item) => (
+                    <option key={item.name} value={item.name} disabled={!item.available}>
+                      {item.name}
+                      {item.available ? '' : '（不可用）'}
+                    </option>
+                  ))
+                )}
+              </select>
+            </label>
             <button
               className="primary"
               onClick={runDock}
@@ -206,7 +223,9 @@ export default function DebugPage() {
                       <td>{p.index}</td>
                       <td>{p.affinity.toFixed(1)}</td>
                       <td>
-                        {p.rmsd_lb.toFixed(1)} – {p.rmsd_ub.toFixed(1)}
+                        {p.rmsd_lb !== null && p.rmsd_ub !== null
+                          ? `${p.rmsd_lb.toFixed(1)} – ${p.rmsd_ub.toFixed(1)}`
+                          : '—'}
                       </td>
                     </tr>
                   ))}

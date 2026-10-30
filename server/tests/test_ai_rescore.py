@@ -225,6 +225,9 @@ def test_run_task_with_mock_boltz(settings, monkeypatch) -> None:
     assert len(task.results) == 2
     assert task.results[0].log_ic50 == pytest.approx(-6.1)
     assert task.results[0].binder_probability == pytest.approx(0.91)
+    # affinity is ligand-level (same input for every pose), so one run is enough
+    assert task.results[1].log_ic50 == pytest.approx(-6.1)
+    assert all(result.rank_by_score is None for result in task.results)
     # yaml was written into job dir
     yaml_path = store.job_dir(job.project_id, job.id) / "ai" / "task001" / "input.yaml"
     assert yaml_path.is_file()

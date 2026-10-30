@@ -42,11 +42,36 @@ def _posebusters_available() -> bool:
     return True
 
 
-def _run_posebusters(pose_sdf: Path, pose_index: int) -> PoseCheck:
+def _run_posebusters(pose_sdf: Path, pose_index: int, protein_pdb: Path | None = None) -> PoseCheck:
     from posebusters import PoseBusters
 
-    buster = PoseBusters()
-    df = buster.bust(pose_sdf)
+    # "redock" requires a crystal reference (mol_true); for a docked pose against
+    # a receptor, "dock" is the correct PoseBusters mode.  Without a protein use
+    # the molecule-only mode.
+    buster = PoseBusters(config="dock" if protein_pdb is not None else "mol")
+    # Pass in-memory Mol objects, not paths: RDKit's file suppliers cannot open
+    # non-ASCII Windows paths (e.g. C:\Users\灰灰\...), which is common on the
+    # target platform.  Parsing from text works regardless of the path encoding.
+    pred = Chem.MolFromMolBlock(
+        pose_sdf.read_text(encoding="utf-8", errors="replace"),
+        sanitize=True,
+        removeHs=False,
+    )
+    if pred is None:
+        raise ValueError(f"RDKit could not read pose for PoseBusters: {pose_sdf.name}")
+    cond = None
+    if protein_pdb is not None and protein_pdb.is_file():
+        cond = Chem.MolFromPDBBlock(
+            protein_pdb.read_text(encoding="utf-8", errors="replace"),
+            sanitize=False,
+            removeHs=False,
+        )
+    # Passing the receptor enables the protein-ligand checks (clashes, volume
+    # overlap); without it PoseBusters only validates ligand-internal geometry.
+    if cond is not None:
+        df = buster.bust(pred, mol_cond=cond)
+    else:
+        df = buster.bust(pred)
     issues: list[PoseCheckIssue] = []
     ok = True
     # bust() returns a DataFrame of rule -> True/False/NaN per molecule
@@ -181,6 +206,7 @@ def check_pose(
     box: Box | None = None,
     use_posebusters: bool = True,
     pose_index: int | None = None,
+    protein_pdb: Path | None = None,
 ) -> PoseCheck:
     """Run pose quality checks. Tries PoseBusters; falls back to builtin checks."""
     idx = pose_index
@@ -191,7 +217,7 @@ def check_pose(
         )
     if use_posebusters and _posebusters_available():
         try:
-            return _run_posebusters(pose_sdf, idx)
+            return _run_posebusters(pose_sdf, idx, protein_pdb=protein_pdb)
         except Exception as exc:  # noqa: BLE001
             log.warning("PoseBusters failed, falling back to builtin: %s", exc)
     mol = _load_pose(pose_sdf)

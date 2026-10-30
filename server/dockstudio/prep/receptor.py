@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import contextlib
+import io
 import json
 import re
 import shutil
 import subprocess
 import sys
+import threading
 import uuid
 from collections import defaultdict
 from collections.abc import Iterable
@@ -18,6 +21,8 @@ from ..logging import get_logger
 from ..models import CocrystalLigand, PreparationError, PreparedReceptor
 
 log = get_logger("prep.receptor")
+
+_MEEKO_LOCK = threading.Lock()
 
 _WATERS = {"HOH", "WAT", "H2O", "DOD"}
 _EXCLUDE = _WATERS | {
@@ -129,10 +134,74 @@ def _regroup_residues(pdb_text: str) -> str:
     return "\n".join(body + atoms + ["END", ""])
 
 
-def _run_meeko_receptor(
+def _meeko_receptor_argv(addh_pdb: Path, out_pdbqt: Path, flex_spec: str | None) -> list[str]:
+    base = out_pdbqt.with_suffix("")
+    argv = [
+        "mk_prepare_receptor",
+        "--read_pdb",
+        str(addh_pdb),
+        "-o",
+        str(base),
+        "-p",
+        "--forgive_extra_bonds",
+    ]
+    if flex_spec:
+        argv += ["-f", flex_spec, "-j"]
+    return argv
+
+
+def _meeko_expected_output(out_pdbqt: Path, flex_spec: str | None) -> Path:
+    base = out_pdbqt.with_suffix("")
+    return base.parent / f"{base.name}_rigid.pdbqt" if flex_spec else out_pdbqt
+
+
+def _run_meeko_receptor_inproc(
     addh_pdb: Path, out_pdbqt: Path, flex_spec: str | None = None
 ) -> Path | None:
-    """Run mk_prepare_receptor. Returns the receptor JSON path when written."""
+    """Run mk_prepare_receptor in-process.
+
+    The subprocess route is impossible in a PyInstaller-frozen app: ``sys.executable``
+    is the backend executable, not a Python interpreter.  Meeko's CLI is plain Python
+    and is safe to call in-process (the package entrypoint already preloads RDKit
+    before OpenBabel), so use that as the primary route.
+    """
+    try:
+        from meeko.cli import mk_prepare_receptor as cli
+    except Exception as exc:
+        raise PreparationError(f"meeko CLI unavailable in this build: {exc}") from exc
+
+    argv = _meeko_receptor_argv(addh_pdb, out_pdbqt, flex_spec)
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+    with _MEEKO_LOCK:
+        old_argv = sys.argv
+        sys.argv = argv
+        try:
+            with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+                cli.main()
+        except SystemExit as exc:
+            if exc.code not in (None, 0):
+                tail = "\n".join((stdout.getvalue() + stderr.getvalue()).splitlines()[-10:])
+                raise PreparationError(f"meeko receptor preparation failed: {tail}") from exc
+        except Exception as exc:
+            tail = "\n".join((stdout.getvalue() + stderr.getvalue()).splitlines()[-10:])
+            raise PreparationError(f"meeko receptor preparation failed: {tail or exc}") from exc
+        finally:
+            sys.argv = old_argv
+
+    expected = _meeko_expected_output(out_pdbqt, flex_spec)
+    if not expected.is_file():
+        tail = "\n".join((stdout.getvalue() + stderr.getvalue()).splitlines()[-10:])
+        raise PreparationError(f"meeko receptor preparation produced no output: {tail}")
+    base = out_pdbqt.with_suffix("")
+    json_path = base.with_suffix(".json")
+    return json_path if json_path.is_file() else None
+
+
+def _run_meeko_receptor_subprocess(
+    addh_pdb: Path, out_pdbqt: Path, flex_spec: str | None = None
+) -> Path | None:
+    """Legacy/dev fallback: run the meeko console script in a subprocess."""
     exe = Path(sys.executable).parent / "Scripts" / "mk_prepare_receptor.exe"
     cmd: list[str] = (
         [str(exe)] if exe.is_file() else [sys.executable, "-m", "meeko.cli.mk_prepare_receptor"]
@@ -153,14 +222,25 @@ def _run_meeko_receptor(
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise PreparationError(f"meeko receptor preparation failed to run: {exc}") from exc
-    # with flex, meeko emits <base>_rigid.pdbqt/_flex.pdbqt/<base>.json; without
-    # flex it writes <base>.pdbqt.
-    expected = base.parent / f"{base.name}_rigid.pdbqt" if flex_spec else out_pdbqt
+    expected = _meeko_expected_output(out_pdbqt, flex_spec)
     if proc.returncode != 0 or not expected.is_file():
         tail = "\n".join(((proc.stdout or "") + (proc.stderr or "")).splitlines()[-10:])
         raise PreparationError(f"meeko receptor preparation failed: {tail}")
     json_path = base.with_suffix(".json")
     return json_path if json_path.is_file() else None
+
+
+def _run_meeko_receptor(
+    addh_pdb: Path, out_pdbqt: Path, flex_spec: str | None = None
+) -> Path | None:
+    """Run meeko receptor preparation, preferring the frozen-safe in-process route."""
+    try:
+        return _run_meeko_receptor_inproc(addh_pdb, out_pdbqt, flex_spec)
+    except PreparationError as exc:
+        if getattr(sys, "frozen", False):
+            raise
+        log.warning("in-process meeko receptor preparation failed, trying CLI: %s", exc)
+        return _run_meeko_receptor_subprocess(addh_pdb, out_pdbqt, flex_spec)
 
 
 _PDBQT_BRANCH_RE = re.compile(r"^(ROOT|ENDROOT|BRANCH|ENDBRANCH|TORSDOF|REMARK)\s*")
@@ -304,6 +384,44 @@ def prepare_receptor(content: bytes, filename: str, out_dir: Path) -> PreparedRe
 _RES_SPEC_RE = re.compile(r"^([A-Za-z0-9_]):(\d+[A-Za-z]?)$")
 
 
+def _copy_receptor_context(base_dir: Path, variant_dir: Path) -> None:
+    """Copy the files analysis/report/pocket/crystal endpoints need into a variant.
+
+    ``prepare_flex_variant`` only writes rigid/flex PDBQT files.  The job-scoped
+    analysis and report endpoints resolve the protein PDB from the receptor's own
+    directory, so without this the flexible variant docks fine but every downstream
+    endpoint fails with FileNotFoundError.
+    """
+    for name in ("receptor_protein.pdb", "receptor_clean.pdb", "receptor_addH.pdb"):
+        src = base_dir / name
+        if src.is_file():
+            shutil.copy2(src, variant_dir / name)
+
+    meta_path = base_dir / "cocrystals.json"
+    if not meta_path.is_file():
+        return
+    try:
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return
+    if not isinstance(meta, list):
+        return
+    updated: list[dict] = []
+    for item in meta:
+        if not isinstance(item, dict):
+            continue
+        src_sdf = Path(str(item.get("sdf_path", "")))
+        if src_sdf.is_file():
+            dst_sdf = variant_dir / src_sdf.name
+            if not dst_sdf.is_file():
+                shutil.copy2(src_sdf, dst_sdf)
+            item = {**item, "sdf_path": str(dst_sdf)}
+        updated.append(item)
+    (variant_dir / "cocrystals.json").write_text(
+        json.dumps(updated, indent=2, ensure_ascii=False), encoding="utf-8"
+    )
+
+
 def prepare_flex_variant(
     base: PreparedReceptor,
     flex_residues: list[str],
@@ -352,6 +470,7 @@ def prepare_flex_variant(
     json_path = var_dir / "receptor.json"
     if not rigid_pdbqt.is_file() or not flex_pdbqt.is_file():
         raise PreparationError("meeko 柔性变体输出不完整（缺少 rigid/flex PDBQT）。")
+    _copy_receptor_context(base_dir, var_dir)
     return PreparedReceptor(
         id=variant_id,
         pdbqt_path=str(rigid_pdbqt),

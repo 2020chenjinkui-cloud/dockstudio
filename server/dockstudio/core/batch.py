@@ -174,15 +174,22 @@ class BatchStore:
             writer.writerow(
                 [
                     rank,
-                    row.ligand_name or "",
-                    row.smiles or "",
+                    _csv_safe(row.ligand_name or ""),
+                    _csv_safe(row.smiles or ""),
                     "" if row.top_affinity is None else f"{row.top_affinity:.3f}",
                     row.status.value,
                     row.job_id,
-                    row.error or "",
+                    _csv_safe(row.error or ""),
                 ]
             )
         return buf.getvalue()
+
+
+def _csv_safe(value: str) -> str:
+    """Neutralize spreadsheet formula injection in exported text cells."""
+    if value and value[0] in ("=", "+", "-", "@", "\t", "\r"):
+        return "'" + value
+    return value
 
 
 def job_request_from_batch(req: BatchCreate, ligand_id: str) -> DockJobRequest:

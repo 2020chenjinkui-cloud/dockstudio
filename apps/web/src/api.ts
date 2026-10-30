@@ -73,6 +73,11 @@ export const IS_TAURI =
 export const API_BASE = IS_TAURI ? 'http://127.0.0.1:8000' : '';
 const WS_HOST = IS_TAURI ? '127.0.0.1:8000' : typeof window !== 'undefined' ? window.location.host : '';
 
+/** Absolute API URL for links/downloads/images (Tauri webview needs the host). */
+export function apiUrl(path: string): string {
+  return API_BASE + path;
+}
+
 async function req<T>(input: string, init?: RequestInit): Promise<T> {
   let res: Response;
   try {
@@ -188,7 +193,7 @@ export async function getAnalysis(jid: string, poseIndex: number): Promise<PoseA
 }
 
 export function reportUrl(jid: string): string {
-  return `/api/jobs/${jid}/report`;
+  return apiUrl(`/api/jobs/${jid}/report`);
 }
 
 export interface JobSubscription {
@@ -330,7 +335,7 @@ export async function getBatchResults(
 }
 
 export function batchResultsCsvUrl(bid: string): string {
-  return `/api/batches/${bid}/results.csv`;
+  return apiUrl(`/api/batches/${bid}/results.csv`);
 }
 
 export interface BatchSubscription {
@@ -407,7 +412,7 @@ export function subscribeBatch(bid: string, handlers: BatchSubscription): () => 
 // ---- 姿态质检 / 2D 图 ----
 
 export function diagramUrl(jid: string, poseIndex: number): string {
-  return `/api/jobs/${jid}/diagram?pose_index=${poseIndex}`;
+  return apiUrl(`/api/jobs/${jid}/diagram?pose_index=${poseIndex}`);
 }
 
 // ---- 报告 v2 ----
@@ -430,7 +435,7 @@ export function buildReportQuery(options: ReportOptions): string {
 
 export function reportUrlV2(jid: string, options: ReportOptions = {}): string {
   const qs = buildReportQuery(options);
-  return `/api/jobs/${jid}/report${qs ? `?${qs}` : ''}`;
+  return apiUrl(`/api/jobs/${jid}/report${qs ? `?${qs}` : ''}`);
 }
 
 // ---- 结果对比 ----
@@ -494,9 +499,9 @@ export async function getCrystalRmsd(jid: string, poseIndex: number): Promise<Cr
 // ---- 溯源 ----
 
 export function auditZipUrl(jid: string): string {
-  return `/api/jobs/${jid}/audit.zip`;
+  return apiUrl(`/api/jobs/${jid}/audit.zip`);
 }
 
 export function projectEventsUrl(pid: string): string {
-  return `/api/projects/${pid}/events.jsonl`;
+  return apiUrl(`/api/projects/${pid}/events.jsonl`);
 }

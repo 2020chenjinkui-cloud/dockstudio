@@ -5,6 +5,7 @@ import { useI18n } from '../../i18n';
 import { isTerminalStatus } from '../../labels';
 import type { DockParams, EngineManifest, Job } from '../../types';
 import Tooltip from '../Tooltip';
+import ParamsPanel from './ParamsPanel';
 import type { WizardData } from './Wizard';
 
 interface StepRunProps {
@@ -13,10 +14,12 @@ interface StepRunProps {
   advanced: boolean;
   engines: EngineManifest[];
   onParamsChange: (params: DockParams) => void;
+  onEngineChange: (engine: string) => void;
   onFlexText: (text: string) => void;
   onJobId: (jobId: string) => void;
   onJobUpdate: (job: Job) => void;
   onCompleted: () => void;
+  onReset: () => void;
 }
 
 export default function StepRun({
@@ -25,10 +28,12 @@ export default function StepRun({
   advanced,
   engines,
   onParamsChange,
+  onEngineChange,
   onFlexText,
   onJobId,
   onJobUpdate,
   onCompleted,
+  onReset,
 }: StepRunProps) {
   const { t } = useI18n();
   const [submitting, setSubmitting] = useState(false);
@@ -38,14 +43,6 @@ export default function StepRun({
   const [pollError, setPollError] = useState<string | null>(null);
   const [beats, setBeats] = useState(0);
   const completedRef = useRef(false);
-
-  const scoringOptions = useMemo(
-    () => [...new Set(engines.filter((e) => e.available).flatMap((e) => e.scoring_functions))],
-    [engines],
-  );
-  const scoringList = scoringOptions.includes(data.params.scoring)
-    ? scoringOptions
-    : [data.params.scoring, ...scoringOptions];
 
   const flexValidation = useMemo(() => {
     if (!advanced || data.flexText.trim() === '') return { valid: [], errors: [] };
@@ -76,18 +73,12 @@ export default function StepRun({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data.jobId]);
 
-  const num = (v: string): number => {
-    const n = Number.parseFloat(v);
-    return Number.isNaN(n) ? 0 : n;
-  };
-
   const submit = async () => {
     if (!data.receptor || !data.ligand || flexBlocked) return;
     setSubmitting(true);
     setSubmitError(null);
     setFlexNote(null);
     try {
-      const engine = engines.find((e) => e.available)?.name ?? 'vina';
       let receptorId = data.receptor.id;
       if (advanced && flexValidation.valid.length > 0) {
         const variant = await createFlexReceptor(data.receptor.id, flexValidation.valid);
@@ -97,7 +88,7 @@ export default function StepRun({
         );
       }
       const res = await createJob(projectId, {
-        engine,
+        engine: data.engine,
         receptor_id: receptorId,
         ligand_id: data.ligand.id,
         box: data.box,
@@ -125,103 +116,14 @@ export default function StepRun({
   if (!data.jobId) {
     return (
       <div className="step-body">
-        <div className="grid-form">
-          <label>
-            <span className="control-row">
-              exhaustiveness (1-64)
-              <Tooltip text={t('help.exhaustiveness')} />
-            </span>
-            <input
-              type="number"
-              min={1}
-              max={64}
-              value={data.params.exhaustiveness}
-              onChange={(e) =>
-                onParamsChange({
-                  ...data.params,
-                  exhaustiveness: Math.min(64, Math.max(1, num(e.target.value))),
-                })
-              }
-            />
-          </label>
-          <label>
-            <span className="control-row">
-              num_modes
-              <Tooltip text={t('help.num_modes')} />
-            </span>
-            <input
-              type="number"
-              min={1}
-              value={data.params.num_modes}
-              onChange={(e) => onParamsChange({ ...data.params, num_modes: num(e.target.value) })}
-            />
-          </label>
-          <label>
-            <span className="control-row">
-              cpu
-              <Tooltip text={t('help.cpu')} />
-            </span>
-            <input
-              type="number"
-              min={1}
-              value={data.params.cpu}
-              onChange={(e) => onParamsChange({ ...data.params, cpu: num(e.target.value) })}
-            />
-          </label>
-          <label>
-            <span className="control-row">
-              scoring
-              <Tooltip text={t('help.scoring')} />
-            </span>
-            <select
-              value={data.params.scoring}
-              onChange={(e) => onParamsChange({ ...data.params, scoring: e.target.value })}
-            >
-              {scoringList.map((s) => (
-                <option key={s} value={s}>
-                  {s}
-                </option>
-              ))}
-            </select>
-          </label>
-          {advanced && (
-            <>
-              <label>
-                <span className="control-row">
-                  energy_range
-                  <Tooltip text={t('help.energyRange')} />
-                </span>
-                <input
-                  type="number"
-                  step={0.5}
-                  min={1}
-                  value={data.params.energy_range}
-                  onChange={(e) =>
-                    onParamsChange({ ...data.params, energy_range: num(e.target.value) })
-                  }
-                />
-              </label>
-              <label>
-                <span className="control-row">
-                  seed（留空随机）
-                  <Tooltip text={t('help.seed')} />
-                </span>
-                <input
-                  type="text"
-                  placeholder="随机"
-                  value={data.params.seed === null ? '' : String(data.params.seed)}
-                  onChange={(e) => {
-                    const t = e.target.value.trim();
-                    onParamsChange({
-                      ...data.params,
-                      seed: t === '' ? null : Math.trunc(num(t)),
-                    });
-                  }}
-                />
-              </label>
-            </>
-          )}
-        </div>
+        <ParamsPanel
+          params={data.params}
+          engines={engines}
+          engine={data.engine}
+          advanced={advanced}
+          onEngineChange={onEngineChange}
+          onParamsChange={onParamsChange}
+        />
         {advanced && (
           <div className="flex-card">
             <div className="control-row">
@@ -288,6 +190,11 @@ export default function StepRun({
       {!terminal && (
         <button className="danger-outline" onClick={cancel}>
           取消任务
+        </button>
+      )}
+      {terminal && (
+        <button className="primary" onClick={onReset}>
+          {t('nav.newRun')}
         </button>
       )}
     </div>

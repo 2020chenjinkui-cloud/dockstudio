@@ -25,6 +25,7 @@ def _job_summary(job: Job) -> dict:
         "status": job.status.value,
         "ligand_id": job.request.ligand_id,
         "engine": job.request.engine,
+        "batch_id": job.batch_id,
         "top_affinity": (
             job.result.poses[0].affinity if job.result is not None and job.result.poses else None
         ),

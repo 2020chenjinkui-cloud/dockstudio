@@ -66,6 +66,12 @@ def bundled_bin_dir() -> Path:
     return Path(__file__).resolve().parents[2] / "resources" / "bin"
 
 
+def bundled_engine_binary(exe_name: str) -> Path | None:
+    """Locate a bundled engine binary in dev and PyInstaller-frozen layouts."""
+    candidate = bundled_bin_dir() / exe_name
+    return candidate if candidate.is_file() else None
+
+
 def resolve_vina_binary(settings: "Settings") -> Path | None:
     """Locate a vina executable: explicit setting -> PATH -> bundled binary."""
     if settings.vina_binary:

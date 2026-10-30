@@ -9,6 +9,7 @@ import json
 from datetime import datetime
 from pathlib import Path
 
+from .. import __version__
 from ..models import DockJobRequest, DockResult, Interaction, PoseAnalysis, Project
 
 ALL_SECTIONS = ("snapshot", "scores", "interactions", "diagram", "viewer3d", "disclaimer")
@@ -16,6 +17,11 @@ ALL_SECTIONS = ("snapshot", "scores", "interactions", "diagram", "viewer3d", "di
 
 def _esc(text: object) -> str:
     return html.escape(str(text))
+
+
+def _js_json(text: str) -> str:
+    """JSON for a JS string literal inside <script>: also neutralize </script>."""
+    return json.dumps(text).replace("</", "<\\/")
 
 
 def _fmt(value: object, ndigits: int = 2) -> str:
@@ -174,10 +180,11 @@ def generate_report(
 
     viewer_block = ""
     if "viewer3d" in want:
-        receptor_json = json.dumps(receptor_pdb)
-        pose_json = json.dumps(top_pose_sdf)
+        receptor_json = _js_json(receptor_pdb)
+        pose_json = _js_json(top_pose_sdf)
         viewer_block = (
             "<h2>3D 结合模式</h2>\n"
+            '<script src="https://3Dmol.org/build/3Dmol-min.js"></script>\n'
             '<div id="viewer"></div>\n'
             "<script>\n(function() {\n"
             f"  const receptorPDB = {receptor_json};\n"
@@ -208,7 +215,6 @@ def generate_report(
 <head>
 <meta charset="utf-8">
 <title>{_esc(report_title)} — DockStudio</title>
-<script src="https://3Dmol.org/build/3Dmol-min.js"></script>
 <style>
   :root {{ color-scheme: light; }}
   body {{ font-family: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
@@ -254,7 +260,7 @@ def generate_report(
       <i>Bioinformatics</i> 2015.</li>
 </ul>
 
-<p class="muted">DockStudio v0.4 生成 · {NOW_TAG}</p>
+<p class="muted">DockStudio v{_esc(__version__)} 生成 · {NOW_TAG}</p>
 </body>
 </html>
 """

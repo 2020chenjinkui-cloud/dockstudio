@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 import logging
 import math
+import platform
+import sys
 from pathlib import Path
 
 from openbabel import pybel
@@ -83,6 +85,21 @@ def _run_plip_subprocess(protein_pdb: Path, pose_sdf: Path, work_dir: Path) -> l
         raise RuntimeError(f"plip worker failed ({proc.returncode}): {proc.stderr.strip()[:300]}")
     raw = json.loads(proc.stdout)
     return [Interaction(**item) for item in raw]
+
+
+def _run_plip_selected(protein_pdb: Path, pose_sdf: Path, work_dir: Path) -> list[Interaction]:
+    """Pick a PLIP execution route that works in source and frozen builds.
+
+    Windows/macOS can run PLIP in-process (the package entrypoint preloads RDKit
+    before OpenBabel).  Linux keeps the subprocess isolation because the known
+    manylinux RDKit/OpenBabel ABI conflict can segfault a shared process; frozen
+    Linux has no Python interpreter for the worker, so it falls back to builtin.
+    """
+    if platform.system() in ("Windows", "Darwin"):
+        return _run_plip(protein_pdb, pose_sdf, work_dir)
+    if getattr(sys, "frozen", False):
+        raise RuntimeError("PLIP worker is unavailable in the frozen Linux build")
+    return _run_plip_subprocess(protein_pdb, pose_sdf, work_dir)
 
 
 def _run_plip(protein_pdb: Path, pose_sdf: Path, work_dir: Path) -> list[Interaction]:
@@ -218,6 +235,13 @@ def _run_builtin(protein_pdb: Path, pose_sdf: Path) -> list[Interaction]:
     )
     if pose is None:
         raise ValueError(f"RDKit could not read pose {pose_sdf}")
+    # PDBQT-derived SDF blocks do not carry RDKit's aromatic flags.  Sanitizing
+    # here makes GetIsAromatic()/AtomRings() meaningful, which the pi-stacking
+    # branch below depends on; keep going with the unsanitized mol if it fails.
+    try:
+        Chem.SanitizeMol(pose)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("could not sanitize pose for builtin analysis: %s", exc)
     protein = _parse_protein_atoms(protein_pdb)
     conf = pose.GetConformer()
 
@@ -354,13 +378,15 @@ def analyze_pose(
     warnings: list[str] = []
     pose_check = None
     try:
-        pose_check = check_pose(pose_sdf, box=box, pose_index=pose_idx)
+        pose_check = check_pose(pose_sdf, box=box, pose_index=pose_idx, protein_pdb=protein_pdb)
     except Exception as exc:  # noqa: BLE001
         log.warning("pose check failed (non-fatal): %s", exc)
         warnings.append(f"姿态质检失败（不影响分析）: {exc}")
+    if pose_check is not None and pose_check.source == "builtin":
+        warnings.append("PoseBusters 未启用或运行失败，本次使用内置几何检查。")
     if use_plip and _plip_available():
         try:
-            interactions = _run_plip_subprocess(protein_pdb, pose_sdf, work_dir)
+            interactions = _run_plip_selected(protein_pdb, pose_sdf, work_dir)
             return PoseAnalysis(
                 pose_index=pose_idx,
                 source="plip",
