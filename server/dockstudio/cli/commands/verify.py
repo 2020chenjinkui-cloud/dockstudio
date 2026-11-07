@@ -294,17 +294,32 @@ def _load_mol_safe(path: Path) -> Chem.Mol | None:
 
 def _find_pose_file(poses_dir: Path, cid: str, rank_idx: int) -> Path | None:
     """Safely locate a compound's pose file by ID or rank without cross-compound fallback."""
-    # 1. Match by compound ID
-    cands = (
-        list(poses_dir.glob(f"*{cid}*.sdf"))
-        + list(poses_dir.glob(f"*{cid}*.mol"))
-        + list(poses_dir.glob(f"*{cid}*.pdbqt"))
-        + list(poses_dir.glob(f"*{cid}*.pdb"))
-    )
+    # 1. Exact ID match (prevents MOL_1 matching MOL_10)
+    for exact_name in (
+        f"{cid}.sdf",
+        f"pose_{cid}.sdf",
+        f"{cid}.mol",
+        f"pose_{cid}.mol",
+        f"{cid}.pdbqt",
+        f"pose_{cid}.pdbqt",
+        f"{cid}.pdb",
+        f"pose_{cid}.pdb",
+    ):
+        p = poses_dir / exact_name
+        if p.is_file():
+            return p
+
+    # 2. Fuzzy match by compound ID with word boundaries / length sorting
+    cands = [
+        f for f in poses_dir.iterdir()
+        if f.is_file() and cid in f.stem and f.suffix.lower() in (".sdf", ".mol", ".pdbqt", ".pdb")
+    ]
     if cands:
+        # Prefer exact stem match or shortest stem (e.g. pose_MOL_1 before pose_MOL_10)
+        cands.sort(key=lambda x: (x.stem != cid and x.stem != f"pose_{cid}", len(x.stem), x.name))
         return cands[0]
 
-    # 2. Match by exact rank pattern (pose_01.sdf, pose_1.sdf, etc.)
+    # 3. Match by exact rank pattern (pose_01.sdf, pose_1.sdf, etc.)
     for pattern in (
         f"pose_{rank_idx}.sdf",
         f"pose_{rank_idx:02d}.sdf",
