@@ -23,6 +23,8 @@ dependencies = [
     "posebusters>=0.4",  # pose quality checks (builtin geometric fallback kept)
     "matplotlib>=3.8",  # 2D diagram support
     "prolif>=2.0",  # interaction fingerprints (optional; unused at runtime)
+    "rich>=13.0",  # terminal UI and TrueColor formatting (Claude Code design system)
+    "prompt-toolkit>=3.0",  # interactive terminal REPL and prompt input
 ]
 
 [project.optional-dependencies]
