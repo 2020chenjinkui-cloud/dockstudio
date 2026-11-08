@@ -45,14 +45,11 @@ def detect_gpu_info() -> str | None:
     return None
 
 
-def run_engines_command() -> int:
-    """Inspect and display engines, hardware, and GPU availability."""
-    gpu = detect_gpu_info()
+def build_engines_pane() -> Any:
+    """Construct the rich Panel containing the engines probe table."""
     settings = get_settings()
-
-    # Hardware overview
     cpu_count = os.cpu_count() or 1
-    
+
     table = Table(
         box=None,
         show_header=True,
@@ -72,7 +69,7 @@ def run_engines_command() -> int:
         is_gpu = getattr(eng.manifest, "requires_gpu", False) or "unidock" in eng.manifest.name.lower()
         status_str = format_status_badge(ok, is_gpu=is_gpu, reason=reason)
         scoring = ", ".join(eng.manifest.scoring_functions)
-        
+
         # Tags / note
         notes = []
         if is_gpu:
@@ -114,10 +111,17 @@ def run_engines_command() -> int:
         "[#48968C]AI 亲和力复核 (全复合物结构与 log IC50)[/#48968C]",
     )
 
-    console.print(make_header(gpu_info=gpu))
-    console.print(make_pane(
+    return make_pane(
         "对接引擎与算力探测",
         table,
         subtitle=f"CPU 核心数: {cpu_count} · 数据目录: {settings.data_dir.name}",
-    ))
+    )
+
+
+def run_engines_command(include_header: bool = True) -> int:
+    """Inspect and display engines, hardware, and GPU availability."""
+    gpu = detect_gpu_info()
+    if include_header:
+        console.print(make_header(gpu_info=gpu))
+    console.print(build_engines_pane())
     return 0

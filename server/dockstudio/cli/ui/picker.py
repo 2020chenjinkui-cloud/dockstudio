@@ -8,8 +8,10 @@ Provides:
 
 from __future__ import annotations
 
+import sys
 from collections.abc import Sequence
 from pathlib import Path
+from typing import Any
 
 from prompt_toolkit import prompt
 from prompt_toolkit.completion import PathCompleter
@@ -17,6 +19,54 @@ from prompt_toolkit.formatted_text import HTML
 from rich.text import Text
 
 from .components import console, make_pane
+
+
+def _read_single_key() -> str:
+    """Read a single key or arrow sequence portably across Windows & POSIX."""
+    if sys.platform == "win32":
+        import msvcrt
+
+        ch = msvcrt.getch()
+        if ch in (b"\x00", b"\xe0"):
+            ch2 = msvcrt.getch()
+            if ch2 == b"H":
+                return "up"
+            if ch2 == b"P":
+                return "down"
+            return ""
+        if ch in (b"\r", b"\n"):
+            return "enter"
+        if ch == b"\x03":
+            raise KeyboardInterrupt
+        if ch == b"\x1b":
+            return "escape"
+        try:
+            return ch.decode("utf-8", errors="ignore")
+        except Exception:
+            return ""
+    else:
+        import termios
+        import tty
+
+        fd = sys.stdin.fileno()
+        old_settings = termios.tcgetattr(fd)
+        try:
+            tty.setcbreak(fd)
+            ch = sys.stdin.read(1)
+            if ch == "\x1b":
+                seq = ch + sys.stdin.read(2)
+                if seq in ("\x1b[A", "\x1bOA"):
+                    return "up"
+                if seq in ("\x1b[B", "\x1bOB"):
+                    return "down"
+                return "escape"
+            if ch in ("\r", "\n"):
+                return "enter"
+            if ch == "\x03":
+                raise KeyboardInterrupt
+            return ch
+        finally:
+            termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
 
 
 def prompt_path(
@@ -72,10 +122,15 @@ def select_one(
     choices: Sequence[str | tuple[str, str]],
     default: int = 0,
 ) -> int:
-    """Select one option from a list.
+    """Select one option from a list with arrow-key in-place selection matching Claude Code.
 
-    Supports direct number entry (e.g. 1, 2) or Enter to accept default.
-    Choices can be simple strings or (title, subtitle) tuples.
+    Supports:
+    - [↑/↓] or [k/j] to navigate in place without terminal spam
+    - [1-9] direct numeric jump
+    - [Enter] or [Space] to confirm selection
+    - Automatic in-place erasure of the menu upon confirmation, leaving a single concise summary:
+      ✓ {title}: {chosen_label}
+    - Graceful fallback to prompt() if stdin/stdout is non-interactive or piped.
     """
     options: list[tuple[str, str]] = []
     for item in choices:
@@ -84,24 +139,85 @@ def select_one(
         else:
             options.append((str(item), ""))
 
+    if not options:
+        return 0
+
+    current_idx = max(0, min(default, len(options) - 1))
+
+    # Check if we can run interactive live arrow-key picker
+    is_interactive = sys.stdin.isatty() and sys.stdout.isatty()
+    if is_interactive:
+        try:
+            from rich.live import Live
+
+            def _build_pane(sel: int) -> Any:
+                content = Text()
+                for idx, (label, sub) in enumerate(options):
+                    is_sel = idx == sel
+                    marker = "❯" if is_sel else " "
+                    idx_str = f"[{idx + 1}]"
+                    if is_sel:
+                        content.append(f" {marker} ", style="bold #D77757")
+                        content.append(f"{idx_str:4s} ", style="bold #D77757")
+                        content.append(f"{label}\n", style="bold #FFFFFF")
+                        if sub:
+                            content.append(f"       {sub}\n", style="#999999")
+                    else:
+                        content.append(f" {marker} ", style="#505050")
+                        content.append(f"{idx_str:4s} ", style="#999999")
+                        content.append(f"{label}\n", style="#CCCCCC")
+                        if sub:
+                            content.append(f"       {sub}\n", style="#505050")
+                return make_pane(
+                    title,
+                    content,
+                    subtitle="[↑/↓] 移动光标 · [Enter] 确认 · [1-9] 直达",
+                )
+
+            with Live(
+                _build_pane(current_idx),
+                console=console,
+                auto_refresh=False,
+                transient=True,
+            ) as live:
+                while True:
+                    live.update(_build_pane(current_idx))
+                    live.refresh()
+                    key = _read_single_key()
+                    if key in ("up", "k"):
+                        current_idx = (current_idx - 1) % len(options)
+                    elif key in ("down", "j"):
+                        current_idx = (current_idx + 1) % len(options)
+                    elif key in ("enter", " "):
+                        break
+                    elif key.isdigit():
+                        num = int(key)
+                        if 1 <= num <= len(options):
+                            current_idx = num - 1
+                            break
+                    elif key in ("escape", "q"):
+                        raise KeyboardInterrupt
+
+            chosen_label = options[current_idx][0]
+            console.print(f"[bold #4EBA65]✓[/bold #4EBA65] {title} [bold #FFFFFF]{chosen_label}[/bold #FFFFFF]")
+            return current_idx
+        except (KeyboardInterrupt, EOFError):
+            console.print("\n[dim]操作已取消[/dim]")
+            raise
+        except Exception:
+            # Fallback to standard prompt below if raw keyboard mode is unavailable
+            pass
+
+    # Non-interactive / pipe / fallback path
     content = Text()
     for idx, (label, sub) in enumerate(options):
         is_default = idx == default
         marker = "❯" if is_default else " "
         idx_str = f"[{idx + 1}]"
-        
         if is_default:
-            content.append(f" {marker} ", style="bold #D77757")
-            content.append(f"{idx_str:4s} ", style="bold #D77757")
-            content.append(f"{label}\n", style="bold #FFFFFF")
-            if sub:
-                content.append(f"       {sub}\n", style="#999999")
+            content.append(f" {marker} {idx_str:4s} {label}\n", style="bold #D77757")
         else:
-            content.append(f" {marker} ", style="#505050")
-            content.append(f"{idx_str:4s} ", style="#999999")
-            content.append(f"{label}\n", style="#CCCCCC")
-            if sub:
-                content.append(f"       {sub}\n", style="#505050")
+            content.append(f"   {idx_str:4s} {label}\n", style="#CCCCCC")
 
     console.print(make_pane(title, content, subtitle=f"默认: [{default + 1}]"))
 

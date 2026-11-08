@@ -25,6 +25,7 @@ from prompt_toolkit.completion import CompleteEvent, Completer, Completion, Path
 from prompt_toolkit.document import Document
 from prompt_toolkit.formatted_text import HTML
 from prompt_toolkit.history import FileHistory, InMemoryHistory
+from rich.console import Group, RenderableType
 from rich.table import Table
 from rich.text import Text
 
@@ -131,8 +132,8 @@ class SlashCompleter(Completer):
                 )
 
 
-def _print_help() -> None:
-    """Print the formatted command guide card matching Claude Code style."""
+def _build_help_pane() -> Any:
+    """Construct the formatted command guide card matching Claude Code style."""
     table = Table(box=None, padding=(0, 2), show_header=False)
     table.add_column("Command", style="bold #D77757", width=12)
     table.add_column("Description", style="#FFFFFF")
@@ -151,12 +152,122 @@ def _print_help() -> None:
     hints.append("[Ctrl+C]", style="bold #D77757")
     hints.append(" 取消当前输入 / 双击退出", style="#999999")
 
-    console.print(make_pane("DockStudio 终端命令指南", table, subtitle="输入 / 即可呼出命令菜单"))
-    console.print(hints)
+    return make_pane(
+        "DockStudio 终端命令指南",
+        Group(table, Text(), hints),
+        subtitle="输入 / 即可呼出命令菜单 · 按 [Tab] 自动补全",
+    )
+
+
+def _print_help() -> None:
+    """Print the formatted command guide card to stdout (backward compatible)."""
+    console.print(_build_help_pane())
     console.print()
 
 
-def _dispatch_command(line: str, store: Any = None) -> int:
+def _build_welcome_pane(gpu_info: str | None = None) -> Any:
+    """Construct the initial welcome dashboard view matching Open-ClaudeCode."""
+    body = Text()
+    body.append("欢迎使用 ", style="#999999")
+    body.append("DockStudio Terminal Agent", style="bold #D77757")
+    body.append("。专为无头 Linux 服务器与 SSH 终端设计的交互式分子对接工作台。\n\n", style="#999999")
+
+    table = Table(box=None, padding=(0, 2), show_header=False)
+    table.add_column("Command", style="bold #D77757", width=12)
+    table.add_column("Action", style="#FFFFFF", width=26)
+    table.add_column("Description", style="#999999")
+
+    table.add_row("/dock", "单分子高精度对接向导", "受体 → 口袋定盒 → 配体 → Vina/GNINA 对接 → 质检")
+    table.add_row("/screen", "高通量虚拟筛选向导", "GPU Uni-Dock (1000x) / 多核并行海量小分子库打分")
+    table.add_row("/engines", "硬件算力与引擎探针", "探查 CPU、NVIDIA Tesla/GeForce GPU 与对接引擎就绪状态")
+    table.add_row("/prep", "受体 / 配体预处理向导", "PDB/SDF 质子化、加氢、指派 Gasteiger 电荷与转 PDBQT")
+    table.add_row("/verify", "外包交付物合规验收", "运行 T1~T5 自动化数值验收套件，复算重现性与数据链自洽")
+    table.add_row("/audit", "事件审计与防篡改验证", "检验 inputs.sha256 指纹与 events.jsonl 不可篡改哈希链")
+    table.add_row("/view", "3D 结构即用即焚查看", "启动轻量内网 Web 3D 快速预览或纯终端 ASCII 构象轮廓")
+    table.add_row("/help", "命令手册与热键指南", "查看全部斜杠指令、参数格式与快捷操作热键")
+    table.add_row("/exit", "退出 Agent 工作台", "安全终止后台子任务并返回宿主系统 Shell")
+
+    hints = Text()
+    hints.append("• 快速开始: ", style="#999999")
+    hints.append("输入 ", style="#999999")
+    hints.append("/dock --demo", style="bold #D77757")
+    hints.append(" 可直接在 1HSG 蛋白酶上运行示例对接；输入 ", style="#999999")
+    hints.append("/engines", style="bold #D77757")
+    hints.append(" 可检测 GPU 加速状态。", style="#999999")
+
+    return make_pane(
+        "交互式分子对接智能体工作台",
+        Group(body, table, Text(), hints),
+        subtitle="输入 / 即可呼出命令菜单 · 按 [Tab] 自动补全 · 界面实时就地刷新",
+    )
+
+
+class AgentWorkspace:
+    """Manages the interactive terminal workspace canvas for DockStudio Agent.
+
+    Provides:
+    - Alternate Screen Buffer (DEC 1049: \\033[?1049h / \\033[?1049l) matching Open-ClaudeCode
+    - In-place viewport refresh: clears canvas, resets cursor, prints fixed Top Header,
+      active View Card, optional flash notices, and bottom prompt area
+    - Eliminates scrolling clutter, duplicate stacked headers, and stale terminal logs
+    """
+
+    def __init__(self, gpu_info: str | None = None, use_alt_screen: bool = True) -> None:
+        self.gpu_info = gpu_info
+        self.use_alt_screen = use_alt_screen and sys.stdout.isatty()
+        self.in_alt_screen = False
+        self.current_view: Any = None
+        self.flash_notice: tuple[str, str] | None = None  # (message, style)
+
+    def enter(self) -> None:
+        """Enter alternate screen buffer and initialize canvas."""
+        if self.use_alt_screen and not self.in_alt_screen:
+            sys.stdout.write("\033[?1049h\033[2J\033[H")
+            sys.stdout.flush()
+            self.in_alt_screen = True
+
+    def exit(self) -> None:
+        """Exit alternate screen buffer and restore host terminal shell."""
+        if self.in_alt_screen:
+            sys.stdout.write("\033[?1049l")
+            sys.stdout.flush()
+            self.in_alt_screen = False
+
+    def clear(self) -> None:
+        """Clear the terminal screen and reset cursor."""
+        if sys.stdout.isatty():
+            sys.stdout.write("\033[2J\033[H")
+            sys.stdout.flush()
+
+    def set_view(self, view: Any) -> None:
+        """Update active view and clear any previous flash notice."""
+        self.current_view = view
+        self.flash_notice = None
+
+    def refresh(self) -> None:
+        """Redraws the entire workspace canvas in place."""
+        if not sys.stdout.isatty():
+            if self.current_view is not None:
+                console.print(self.current_view)
+            return
+
+        self.clear()
+        console.print(make_header(version="2.0.5", gpu_info=self.gpu_info))
+
+        if self.current_view is not None:
+            console.print(self.current_view)
+
+        if self.flash_notice:
+            msg, style = self.flash_notice
+            console.print(f"[{style}]{msg}[/{style}]\n")
+            self.flash_notice = None
+
+
+def _dispatch_command(
+    line: str,
+    store: Any = None,
+    workspace: AgentWorkspace | None = None,
+) -> int:
     """Parse and dispatch a single command line. Returns exit code."""
     line = line.strip()
     if not line or line.startswith("#"):
@@ -181,27 +292,40 @@ def _dispatch_command(line: str, store: Any = None) -> int:
         return 999  # Signal to terminate REPL loop
 
     if cmd == "/help":
+        if workspace:
+            workspace.set_view(_build_help_pane())
+            return 0
         _print_help()
         return 0
 
     if cmd == "/clear":
+        if workspace:
+            workspace.set_view(_build_welcome_pane(gpu_info=workspace.gpu_info))
+            return 0
         console.clear()
         return 0
 
     if cmd == "/engines":
-        from .commands.engines import run_engines_command
+        from .commands.engines import build_engines_pane, run_engines_command
 
+        if workspace:
+            workspace.set_view(build_engines_pane())
+            return 0
         return run_engines_command()
 
     if cmd == "/dock":
         from .commands.dock import run_dock_interactive
 
         demo_flag = "--demo" in args or "-d" in args
+        if workspace:
+            workspace.clear()
         return run_dock_interactive(demo=demo_flag)
 
     if cmd == "/screen":
         from .commands.screen import run_screen_interactive
 
+        if workspace:
+            workspace.clear()
         return run_screen_interactive()
 
     if cmd == "/prep":
@@ -209,13 +333,19 @@ def _dispatch_command(line: str, store: Any = None) -> int:
 
         sub = args[0].lower() if args else ""
         if sub in ("receptor", "rec"):
+            if workspace:
+                workspace.clear()
             run_prep_receptor_interactive()
             return 0
         if sub in ("ligand", "lig"):
+            if workspace:
+                workspace.clear()
             run_prep_ligand_interactive()
             return 0
         from .ui import select_one
 
+        if workspace:
+            workspace.clear()
         choice = select_one("选择准备目标:", [
             ("受体蛋白准备 (Receptor Prep)", "清洗、加氢、指派电荷、转 PDBQT"),
             ("小分子配体准备 (Ligand Prep)", "SMILES/SDF 质子化、低能 3D 构象生成"),
@@ -235,6 +365,8 @@ def _dispatch_command(line: str, store: Any = None) -> int:
             target_path = prompt_path("请输入待核算交付包路径 (目录或 .zip)")
         else:
             target_path = Path(path_str).expanduser().resolve()
+        if workspace:
+            workspace.clear()
         return run_verify(target_path)
 
     if cmd == "/audit":
@@ -249,8 +381,13 @@ def _dispatch_command(line: str, store: Any = None) -> int:
             except (KeyboardInterrupt, EOFError):
                 return 0
         if not target:
-            console.print("[#FF6B80]任务标识不能为空[/#FF6B80]")
+            if workspace:
+                workspace.flash_notice = ("任务标识不能为空", "bold #FF6B80")
+            else:
+                console.print("[#FF6B80]任务标识不能为空[/#FF6B80]")
             return 2
+        if workspace:
+            workspace.clear()
         return run_audit(target)
 
     if cmd == "/view":
@@ -267,9 +404,14 @@ def _dispatch_command(line: str, store: Any = None) -> int:
         else:
             target_path = prompt_path("请输入结构文件路径 (PDB/PDBQT/SDF)")
 
+        if workspace:
+            workspace.clear()
         return run_view(target_path, port=port, ascii_mode=ascii_mode)
 
-    console.print(f"[#FF6B80]未知命令: {raw_cmd}[/#FF6B80] (输入 [bold #D77757]/help[/bold #D77757] 查看帮助)")
+    if workspace:
+        workspace.flash_notice = (f"未知命令: {raw_cmd} (输入 /help 查看帮助)", "bold #FF6B80")
+    else:
+        console.print(f"[#FF6B80]未知命令: {raw_cmd}[/#FF6B80] (输入 [bold #D77757]/help[/bold #D77757] 查看帮助)")
     return 1
 
 
@@ -278,22 +420,20 @@ def run_agent_repl(store: Any = None) -> int:
     settings = get_settings()
     gpu_info = detect_gpu_info()
 
-    # Welcome banner
-    console.print()
-    console.print(make_header(version="2.0.5", gpu_info=gpu_info))
-    console.print(
-        "[dim]输入 [bold #D77757]/help[/bold #D77757] 查看命令列表，"
-        "输入 [bold #D77757]/exit[/bold #D77757] 退出交互环境[/dim]\n"
-    )
-
     # 1. Non-interactive pipe/stream execution (e.g. cat commands.txt | dockstudio)
     if not sys.stdin.isatty():
+        console.print()
+        console.print(make_header(version="2.0.5", gpu_info=gpu_info))
+        console.print(
+            "[dim]输入 [bold #D77757]/help[/bold #D77757] 查看命令列表，"
+            "输入 [bold #D77757]/exit[/bold #D77757] 退出交互环境[/dim]\n"
+        )
         try:
             for raw_line in sys.stdin:
                 line = raw_line.strip()
                 if not line or line.startswith("#"):
                     continue
-                rc = _dispatch_command(line, store=store)
+                rc = _dispatch_command(line, store=store, workspace=None)
                 if rc == 999:
                     break
                 if rc != 0:
@@ -306,11 +446,14 @@ def run_agent_repl(store: Any = None) -> int:
         cleanup_active_processes()
         return 0
 
-    # 2. History setup
+    # 2. Interactive Workspace & History setup
+    workspace = AgentWorkspace(gpu_info=gpu_info)
+    workspace.enter()
+    workspace.set_view(_build_welcome_pane(gpu_info=gpu_info))
+
     history_file = settings.data_dir / ".agent_history"
     try:
         history_file.parent.mkdir(parents=True, exist_ok=True)
-        # Verify writable before instantiating FileHistory
         with open(history_file, "a", encoding="utf-8"):
             pass
         history = FileHistory(str(history_file))
@@ -342,38 +485,46 @@ def run_agent_repl(store: Any = None) -> int:
 
     last_ctrl_c: float = 0.0
 
-    while True:
-        try:
-            user_input = session.prompt()
-            last_ctrl_c = 0.0  # Reset Ctrl+C counter on successful input
-        except KeyboardInterrupt:
-            now = time.time()
-            if now - last_ctrl_c < 1.5:
-                console.print("\n[dim]检测到连续 Ctrl+C，正在退出 DockStudio Agent...[/dim]")
+    try:
+        while True:
+            workspace.refresh()
+
+            try:
+                user_input = session.prompt()
+                last_ctrl_c = 0.0
+            except KeyboardInterrupt:
+                now = time.time()
+                if now - last_ctrl_c < 1.5:
+                    workspace.exit()
+                    console.print("\n[dim]检测到连续 Ctrl+C，正在退出 DockStudio Agent...[/dim]")
+                    cleanup_active_processes()
+                    return 0
+                last_ctrl_c = now
+                workspace.flash_notice = ("^C (再次按 Ctrl+C 或输入 /exit 退出)", "dim")
+                continue
+            except EOFError:
+                workspace.exit()
+                console.print("\n[dim]检测到 EOF 输入，正在退出 DockStudio Agent...[/dim]")
                 cleanup_active_processes()
                 return 0
-            last_ctrl_c = now
-            console.print("\n[dim]^C (再次按 Ctrl+C 或输入 /exit 退出)[/dim]")
-            continue
-        except EOFError:
-            console.print("\n[dim]检测到 EOF 输入，正在退出 DockStudio Agent...[/dim]")
-            cleanup_active_processes()
-            return 0
 
-        if not user_input.strip():
-            continue
+            if not user_input.strip():
+                continue
 
-        try:
-            rc = _dispatch_command(user_input, store=store)
-            if rc == 999:
-                console.print("[dim]感谢使用 DockStudio，再见！[/dim]")
+            try:
+                rc = _dispatch_command(user_input, store=store, workspace=workspace)
+                if rc == 999:
+                    workspace.exit()
+                    console.print("[dim]感谢使用 DockStudio，再见！[/dim]")
+                    cleanup_active_processes()
+                    return 0
+            except KeyboardInterrupt:
+                workspace.flash_notice = ("当前操作已被中断", "dim")
                 cleanup_active_processes()
-                return 0
-        except KeyboardInterrupt:
-            console.print("\n[dim]当前操作已被中断[/dim]")
-            cleanup_active_processes()
-        except Exception as err:  # noqa: BLE001
-            console.print(f"[bold #FF6B80]执行出错: {err}[/bold #FF6B80]")
+            except Exception as err:  # noqa: BLE001
+                workspace.flash_notice = (f"执行出错: {err}", "bold #FF6B80")
+    finally:
+        workspace.exit()
+        cleanup_active_processes()
 
-    cleanup_active_processes()
     return 0
