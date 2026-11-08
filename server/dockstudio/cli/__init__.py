@@ -148,7 +148,8 @@ def _build_parser() -> argparse.ArgumentParser:
     dock_p.add_argument("--demo", action="store_true", help="使用内置 1HSG 示例运行向导")
 
     # 6. screen
-    sub.add_parser("screen", help="启动高通量虚拟筛选向导 (GPU Uni-Dock / 多进程)")
+    screen_p = sub.add_parser("screen", help="启动高通量虚拟筛选向导 (GPU Uni-Dock / 多进程)")
+    screen_p.add_argument("--demo", action="store_true", help="使用内置 1HSG + 示例药物分子库运行向导")
 
     # 7. verify
     verify_p = sub.add_parser("verify", help="运行 T1~T5 自动化交付物数值验收套件")
@@ -226,7 +227,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.command == "screen":
         from .commands.screen import run_screen_interactive
-        return run_screen_interactive()
+        return run_screen_interactive(demo=args.demo)
 
     if args.command == "verify":
         from .commands.verify import run_verify

@@ -244,6 +244,15 @@ class AgentWorkspace:
         self.current_view = view
         self.flash_notice = None
 
+    def prepare_command_canvas(self, show_header: bool = True) -> None:
+        """Clear canvas for an interactive/streaming command and optionally render top header."""
+        self.current_view = None
+        self.flash_notice = None
+        if sys.stdout.isatty():
+            self.clear()
+            if show_header:
+                console.print(make_header(version="2.0.5", gpu_info=self.gpu_info))
+
     def refresh(self) -> None:
         """Redraws the entire workspace canvas in place."""
         if not sys.stdout.isatty():
@@ -251,15 +260,14 @@ class AgentWorkspace:
                 console.print(self.current_view)
             return
 
-        self.clear()
-        console.print(make_header(version="2.0.5", gpu_info=self.gpu_info))
-
         if self.current_view is not None:
+            self.clear()
+            console.print(make_header(version="2.0.5", gpu_info=self.gpu_info))
             console.print(self.current_view)
 
         if self.flash_notice:
             msg, style = self.flash_notice
-            console.print(f"[{style}]{msg}[/{style}]\n")
+            console.print(f"[{style}]{msg}[/{style}]")
             self.flash_notice = None
 
 
@@ -294,6 +302,7 @@ def _dispatch_command(
     if cmd == "/help":
         if workspace:
             workspace.set_view(_build_help_pane())
+            workspace.refresh()
             return 0
         _print_help()
         return 0
@@ -301,6 +310,7 @@ def _dispatch_command(
     if cmd == "/clear":
         if workspace:
             workspace.set_view(_build_welcome_pane(gpu_info=workspace.gpu_info))
+            workspace.refresh()
             return 0
         console.clear()
         return 0
@@ -310,6 +320,7 @@ def _dispatch_command(
 
         if workspace:
             workspace.set_view(build_engines_pane())
+            workspace.refresh()
             return 0
         return run_engines_command()
 
@@ -318,15 +329,16 @@ def _dispatch_command(
 
         demo_flag = "--demo" in args or "-d" in args
         if workspace:
-            workspace.clear()
+            workspace.prepare_command_canvas(show_header=False)
         return run_dock_interactive(demo=demo_flag)
 
     if cmd == "/screen":
         from .commands.screen import run_screen_interactive
 
+        demo_flag = "--demo" in args or "-d" in args
         if workspace:
-            workspace.clear()
-        return run_screen_interactive()
+            workspace.prepare_command_canvas(show_header=False)
+        return run_screen_interactive(demo=demo_flag)
 
     if cmd == "/prep":
         from .commands.prep import run_prep_ligand_interactive, run_prep_receptor_interactive
@@ -334,18 +346,18 @@ def _dispatch_command(
         sub = args[0].lower() if args else ""
         if sub in ("receptor", "rec"):
             if workspace:
-                workspace.clear()
+                workspace.prepare_command_canvas(show_header=True)
             run_prep_receptor_interactive()
             return 0
         if sub in ("ligand", "lig"):
             if workspace:
-                workspace.clear()
+                workspace.prepare_command_canvas(show_header=True)
             run_prep_ligand_interactive()
             return 0
         from .ui import select_one
 
         if workspace:
-            workspace.clear()
+            workspace.prepare_command_canvas(show_header=True)
         choice = select_one("选择准备目标:", [
             ("受体蛋白准备 (Receptor Prep)", "清洗、加氢、指派电荷、转 PDBQT"),
             ("小分子配体准备 (Ligand Prep)", "SMILES/SDF 质子化、低能 3D 构象生成"),
@@ -366,7 +378,7 @@ def _dispatch_command(
         else:
             target_path = Path(path_str).expanduser().resolve()
         if workspace:
-            workspace.clear()
+            workspace.prepare_command_canvas(show_header=True)
         return run_verify(target_path)
 
     if cmd == "/audit":
@@ -383,11 +395,12 @@ def _dispatch_command(
         if not target:
             if workspace:
                 workspace.flash_notice = ("任务标识不能为空", "bold #FF6B80")
+                workspace.refresh()
             else:
                 console.print("[#FF6B80]任务标识不能为空[/#FF6B80]")
             return 2
         if workspace:
-            workspace.clear()
+            workspace.prepare_command_canvas(show_header=False)
         return run_audit(target)
 
     if cmd == "/view":
@@ -405,11 +418,12 @@ def _dispatch_command(
             target_path = prompt_path("请输入结构文件路径 (PDB/PDBQT/SDF)")
 
         if workspace:
-            workspace.clear()
+            workspace.prepare_command_canvas(show_header=False)
         return run_view(target_path, port=port, ascii_mode=ascii_mode)
 
     if workspace:
         workspace.flash_notice = (f"未知命令: {raw_cmd} (输入 /help 查看帮助)", "bold #FF6B80")
+        workspace.refresh()
     else:
         console.print(f"[#FF6B80]未知命令: {raw_cmd}[/#FF6B80] (输入 [bold #D77757]/help[/bold #D77757] 查看帮助)")
     return 1
@@ -486,9 +500,9 @@ def run_agent_repl(store: Any = None) -> int:
     last_ctrl_c: float = 0.0
 
     try:
-        while True:
-            workspace.refresh()
+        workspace.refresh()
 
+        while True:
             try:
                 user_input = session.prompt()
                 last_ctrl_c = 0.0
@@ -501,6 +515,7 @@ def run_agent_repl(store: Any = None) -> int:
                     return 0
                 last_ctrl_c = now
                 workspace.flash_notice = ("^C (再次按 Ctrl+C 或输入 /exit 退出)", "dim")
+                workspace.refresh()
                 continue
             except EOFError:
                 workspace.exit()
@@ -509,6 +524,9 @@ def run_agent_repl(store: Any = None) -> int:
                 return 0
 
             if not user_input.strip():
+                if sys.stdout.isatty():
+                    sys.stdout.write("\033[1A\033[2K\r")
+                    sys.stdout.flush()
                 continue
 
             try:
@@ -520,9 +538,11 @@ def run_agent_repl(store: Any = None) -> int:
                     return 0
             except KeyboardInterrupt:
                 workspace.flash_notice = ("当前操作已被中断", "dim")
+                workspace.refresh()
                 cleanup_active_processes()
             except Exception as err:  # noqa: BLE001
                 workspace.flash_notice = (f"执行出错: {err}", "bold #FF6B80")
+                workspace.refresh()
     finally:
         workspace.exit()
         cleanup_active_processes()

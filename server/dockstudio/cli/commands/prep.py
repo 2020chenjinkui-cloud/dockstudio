@@ -31,7 +31,7 @@ def run_prep_receptor_interactive(pdb_path: Path | None = None) -> tuple[Path, A
     content.append(f"• 包含多肽链: {', '.join(receptor.chains) if receptor.chains else '单链'}\n", style="#999999")
 
     if receptor.cocrystal_ligands:
-        content.append(f"\n[bold #D77757]检测到 {len(receptor.cocrystal_ligands)} 个共晶小分子配体:[/bold #D77757]\n")
+        content.append(f"\n检测到 {len(receptor.cocrystal_ligands)} 个共晶小分子配体:\n", style="bold #D77757")
         for idx, c in enumerate(receptor.cocrystal_ligands):
             cx, cy, cz = c.center
             content.append(
@@ -42,7 +42,7 @@ def run_prep_receptor_interactive(pdb_path: Path | None = None) -> tuple[Path, A
         content.append("\n• 未检测到共晶配体 (后续需使用腔体预测或手动定盒)\n", style="#999999")
 
     if receptor.warnings:
-        content.append("\n[bold #FFC107]注意事项 / 警告:[/bold #FFC107]\n")
+        content.append("\n注意事项 / 警告:\n", style="bold #FFC107")
         for w in receptor.warnings:
             content.append(f"  ▲ {w}\n", style="#FFC107")
 
@@ -73,7 +73,7 @@ def run_prep_ligand_interactive() -> tuple[str, Any]:
     else:
         lig_path = prompt_path("请指定配体文件路径 (SDF / MOL2)")
         with console.status(f"[bold #93A5FF]正在解析配体文件并加氢转 PDBQT: {lig_path.name}...[/bold #93A5FF]"):
-            ligand = prepare_ligand_from_file(lig_path.read_bytes(), lig_path.name, out_dir)
+            ligand = prepare_ligand_from_file(lig_path, out_dir)
 
     content = Text()
     content.append(f"✓ 配体准备成功: {ligand.name or 'ligand'}\n", style="bold #4EBA65")

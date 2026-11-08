@@ -45,6 +45,7 @@ def _read_single_key() -> str:
         except Exception:
             return ""
     else:
+        import select
         import termios
         import tty
 
@@ -54,11 +55,15 @@ def _read_single_key() -> str:
             tty.setcbreak(fd)
             ch = sys.stdin.read(1)
             if ch == "\x1b":
-                seq = ch + sys.stdin.read(2)
-                if seq in ("\x1b[A", "\x1bOA"):
-                    return "up"
-                if seq in ("\x1b[B", "\x1bOB"):
-                    return "down"
+                if select.select([sys.stdin], [], [], 0.05)[0]:
+                    ch2 = sys.stdin.read(1)
+                    if ch2 in ("[", "O") and select.select([sys.stdin], [], [], 0.05)[0]:
+                        ch3 = sys.stdin.read(1)
+                        seq = ch + ch2 + ch3
+                        if seq in ("\x1b[A", "\x1bOA"):
+                            return "up"
+                        if seq in ("\x1b[B", "\x1bOB"):
+                            return "down"
                 return "escape"
             if ch in ("\r", "\n"):
                 return "enter"

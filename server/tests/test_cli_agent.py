@@ -694,3 +694,98 @@ def test_agent_dispatch_and_process_cleanup():
     cleanup_active_processes()
     mock_proc.terminate.assert_called_once()
     assert len(ACTIVE_PROCESSES) == 0
+
+
+def test_agent_workspace_and_in_place_views():
+    """Test 18: Verify AgentWorkspace in-place view switching and command canvas management."""
+    from dockstudio.cli.agent import AgentWorkspace, _build_help_pane, _build_welcome_pane
+
+    ws = AgentWorkspace(gpu_info="NVIDIA Tesla P4 (8192 MiB)", use_alt_screen=False)
+    ws.set_view(_build_welcome_pane(ws.gpu_info))
+    assert ws.current_view is not None
+
+    # Test /help, /engines, /clear in-place view updates on workspace
+    assert _dispatch_command("/help", workspace=ws) == 0
+    assert ws.current_view is not None
+
+    assert _dispatch_command("/engines", workspace=ws) == 0
+    assert ws.current_view is not None
+
+    assert _dispatch_command("/clear", workspace=ws) == 0
+    assert ws.current_view is not None
+
+    # Test prepare_command_canvas clears current_view
+    ws.prepare_command_canvas(show_header=True)
+    assert ws.current_view is None
+
+
+def test_dock_demo_and_post_dock_actions_end_to_end(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    """Test 19: Run full 5-step /dock --demo wizard including PLIP, PoseBusters, and audit.zip export."""
+    from dockstudio.cli.commands.dock import run_dock_interactive
+    from dockstudio.models import DockParams
+
+    monkeypatch.setenv("DOCKSTUDIO_DATA_DIR", str(tmp_path / "dock_data"))
+    from dockstudio.config import get_settings
+    get_settings.cache_clear()
+
+    # Sequence of select_one responses:
+    # 1. Search box -> 0 (around cocrystal ligand)
+    # 2. Engine -> 0 (vina)
+    # 3. Post-dock action -> 0 (PLIP tree), then 1 (PoseBusters), then 2 (Export audit.zip), then 3 (Exit)
+    responses = iter([0, 0, 0, 1, 2, 3])
+    monkeypatch.setattr("dockstudio.cli.commands.dock.select_one", lambda *a, **kw: next(responses, 3))
+
+    # Also verify _select_docking_params works without crashing on available_engines() / manifest.requires_gpu
+    from dockstudio.cli.commands.dock import _select_docking_params
+    eng_name, sc_name, d_params = _select_docking_params(get_settings())
+    assert isinstance(eng_name, str) and isinstance(sc_name, str) and d_params.exhaustiveness == 8
+
+    # Reset responses and use fast exhaustiveness=1 for actual Vina execution
+    responses = iter([0, 0, 1, 2, 3])
+    monkeypatch.setattr("dockstudio.cli.commands.dock.select_one", lambda *a, **kw: next(responses, 3))
+    monkeypatch.setattr(
+        "dockstudio.cli.commands.dock._select_docking_params",
+        lambda _s: ("vina", "vina", DockParams(exhaustiveness=1, num_modes=2, cpu=2, seed=42)),
+    )
+
+    try:
+        rc = run_dock_interactive(demo=True)
+        assert rc == 0
+    finally:
+        get_settings.cache_clear()
+
+
+def test_prep_and_screen_demo_end_to_end(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    """Test 20: Verify /prep (receptor & SDF ligand) and /screen --demo wizards run end-to-end."""
+    from dockstudio.cli.commands.prep import run_prep_ligand_interactive, run_prep_receptor_interactive
+    from dockstudio.cli.commands.screen import run_screen_interactive
+    from dockstudio.models import DockParams
+
+    monkeypatch.setenv("DOCKSTUDIO_DATA_DIR", str(tmp_path / "screen_data"))
+    from dockstudio.config import get_settings
+    get_settings.cache_clear()
+
+    try:
+        # 1. Test receptor prep
+        fixtures = Path(__file__).resolve().parent / "fixtures"
+        pdb_path, rec = run_prep_receptor_interactive(fixtures / "1HSG.pdb")
+        assert Path(rec.pdbqt_path).is_file()
+
+        # 2. Test ligand prep from SDF file (mode=1)
+        sdf_file = tmp_path / "aspirin.sdf"
+        sdf_file.write_text(_create_conformer_sdf_block("CC(=O)Oc1ccccc1C(=O)O"), encoding="utf-8")
+        monkeypatch.setattr("dockstudio.cli.commands.prep.select_one", lambda *a, **kw: 1)
+        monkeypatch.setattr("dockstudio.cli.commands.prep.prompt_path", lambda *a, **kw: sdf_file)
+        lig_name, lig = run_prep_ligand_interactive()
+        assert Path(lig.pdbqt_path).is_file()
+
+        # 3. Test /screen --demo (select box=0, fast exhaustiveness=1)
+        monkeypatch.setattr("dockstudio.cli.commands.dock.select_one", lambda *a, **kw: 0)
+        monkeypatch.setattr(
+            "dockstudio.cli.commands.screen._select_docking_params",
+            lambda _s: ("vina", "vina", DockParams(exhaustiveness=1, num_modes=1, cpu=2, seed=42)),
+        )
+        rc = run_screen_interactive(demo=True)
+        assert rc == 0
+    finally:
+        get_settings.cache_clear()

@@ -11,6 +11,7 @@ Implements the 5-step docking workflow in terminal with Claude Code design syste
 from __future__ import annotations
 
 import os
+import sys
 import tempfile
 import time
 from pathlib import Path
@@ -19,6 +20,7 @@ from typing import Any
 from prompt_toolkit import prompt
 from prompt_toolkit.formatted_text import HTML
 from rich.table import Table
+from rich.text import Text
 
 from ...analysis.export import export_poses
 from ...analysis.interactions import analyze_pose
@@ -43,6 +45,7 @@ from ..ui import (
     console,
     format_affinity,
     format_posecheck,
+    make_header,
     make_pane,
     render_interaction_tree,
     render_posecheck_table,
@@ -77,15 +80,22 @@ def _render_wizard_header(step: int, total_steps: int = 5, step_title: str = "")
     )
 
 
+def _refresh_step_canvas(step: int, total_steps: int, step_title: str) -> None:
+    """Clears viewport and renders top header + stepper card in-place."""
+    if sys.stdout.isatty():
+        sys.stdout.write("\033[2J\033[H")
+        sys.stdout.flush()
+        console.print(make_header(version="2.0.5"))
+        console.print(_render_wizard_header(step, total_steps, step_title))
+        console.print()
+
+
 def run_dock_interactive(demo: bool = False) -> int:
     """Runs the 5-step interactive docking wizard."""
     settings = get_settings()
 
     # Step 1: Receptor
-    if sys.stdin.isatty():
-        console.clear()
-        console.print(_render_wizard_header(1, 5, "受体结构加载与准备"))
-        console.print()
+    _refresh_step_canvas(1, 5, "受体结构加载与准备")
 
     if demo:
         fixtures = Path(__file__).resolve().parents[3] / "tests" / "fixtures"
@@ -100,20 +110,14 @@ def run_dock_interactive(demo: bool = False) -> int:
         pdb_path, receptor = run_prep_receptor_interactive()
 
     # Step 2: Pocket / Search Box
-    if sys.stdin.isatty():
-        time.sleep(0.3)
-        console.clear()
-        console.print(_render_wizard_header(2, 5, "口袋与搜索盒 (Search Box) 定义"))
-        console.print(f"[dim]已就绪受体: {receptor.id} (链: {', '.join(receptor.chains)})[/dim]\n")
+    _refresh_step_canvas(2, 5, "口袋与搜索盒 (Search Box) 定义")
+    console.print(f"[dim]已就绪受体: {receptor.id} (链: {', '.join(receptor.chains)})[/dim]\n")
 
     box = _select_search_box(pdb_path, receptor)
 
     # Step 3: Ligand
-    if sys.stdin.isatty():
-        time.sleep(0.3)
-        console.clear()
-        console.print(_render_wizard_header(3, 5, "小分子配体结构加载与构象准备"))
-        console.print(f"[dim]已定义搜索盒: 质心 ({box.center[0]:.1f}, {box.center[1]:.1f}, {box.center[2]:.1f}) · 尺寸 {box.size[0]:.1f}Å[/dim]\n")
+    _refresh_step_canvas(3, 5, "小分子配体结构加载与构象准备")
+    console.print(f"[dim]已定义搜索盒: 质心 ({box.center[0]:.1f}, {box.center[1]:.1f}, {box.center[2]:.1f}) · 尺寸 {box.size[0]:.1f}Å[/dim]\n")
 
     if demo:
         fixtures = Path(__file__).resolve().parents[3] / "tests" / "fixtures"
@@ -129,24 +133,18 @@ def run_dock_interactive(demo: bool = False) -> int:
         lig_name, ligand = run_prep_ligand_interactive()
 
     # Step 4: Engine & Parameters
-    if sys.stdin.isatty():
-        time.sleep(0.3)
-        console.clear()
-        console.print(_render_wizard_header(4, 5, "计算引擎与对接参数设定"))
-        console.print(f"[dim]已就绪配体: {lig_name} (可旋转键: {ligand.n_rotatable_bonds})[/dim]\n")
+    _refresh_step_canvas(4, 5, "计算引擎与对接参数设定")
+    console.print(f"[dim]已就绪配体: {lig_name} (可旋转键: {ligand.n_rotatable_bonds})[/dim]\n")
 
     engine_name, scoring, params = _select_docking_params(settings)
 
     # Step 5: Docking Execution
-    if sys.stdin.isatty():
-        console.clear()
-        console.print(_render_wizard_header(5, 5, "启动构象搜索与打分计算"))
-        console.print()
+    _refresh_step_canvas(5, 5, "启动构象搜索与打分计算")
 
     run_dir = Path(tempfile.mkdtemp(prefix="dockstudio_run_"))
-    engine = get_engine(engine_name, settings)
+    engine = get_engine(engine_name)
 
-    console.print("\n[bold #D77757]正在启动对接计算...[/bold #D77757]")
+    console.print("[bold #D77757]正在启动对接计算...[/bold #D77757]")
     t0 = time.time()
     with console.status(f"[bold #93A5FF]计算中: 引擎={engine_name}, 打分={scoring}, 构象搜索中...[/bold #93A5FF]"):
         result = engine.dock(
@@ -215,13 +213,13 @@ def _select_search_box(pdb_path: Path, receptor: Any) -> Box:
 
 def _select_docking_params(settings: Any) -> tuple[str, str, DockParams]:
     """Select engine and parameters."""
-    engines = available_engines(settings)
+    engines = available_engines()
     engine_choices = []
     default_idx = 0
     
     for i, eng in enumerate(engines):
         ok, reason = eng.is_available()
-        is_gpu = "gpu" in eng.manifest.tags or getattr(eng.manifest, "requires_gpu", False)
+        is_gpu = bool(getattr(eng.manifest, "requires_gpu", False))
         status_tag = " [GPU]" if is_gpu else " [CPU]"
         sub = f"打分: {', '.join(eng.manifest.scoring_functions)} · {'可用' if ok else '不可用: ' + reason}"
         engine_choices.append((f"{eng.manifest.name}{status_tag}", sub))
@@ -252,7 +250,7 @@ def _select_docking_params(settings: Any) -> tuple[str, str, DockParams]:
 def _display_results_and_qc(
     pdb_path: Path, receptor: Any, lig_name: str, result: Any, run_dir: Path
 ) -> None:
-    """Renders PoseBusters and PLIP interaction summary table."""
+    """Renders PoseBusters and PLIP interaction summary table with in-place inspection."""
     table = Table(
         title="[bold #D77757]DockStudio 构象排行与质检总表[/bold #D77757]",
         border_style="#888888",
@@ -296,7 +294,7 @@ def _display_results_and_qc(
 
     console.print(table)
 
-    # Interactive inspection loop
+    # Interactive inspection loop with in-place refresh
     while True:
         action_choices = [
             ("查看 Top 1 构象的 PLIP 微观相互作用树", "在终端打印氢键、盐桥、π-π、疏水接触残基与距离"),
@@ -305,6 +303,14 @@ def _display_results_and_qc(
             ("结束并返回", "退出当前向导"),
         ]
         action = select_one("后续交互操作:", action_choices, default=0)
+        if action == 3:
+            break
+
+        if sys.stdout.isatty():
+            _refresh_step_canvas(5, 5, "构象排行与质检报告")
+            console.print(table)
+            console.print()
+
         if action == 0:
             top_contacts = analyses[0]["contacts"] if analyses else []
             tree = render_interaction_tree(
@@ -342,7 +348,5 @@ def _display_results_and_qc(
                 created_at=datetime.now(),
             )
             audit_path = run_dir / f"audit_{job.id}.zip"
-            build_audit_zip(job, run_dir, audit_path)
+            build_audit_zip(job, run_dir, [], audit_path)
             console.print(f"[bold #4EBA65]✓ 审计包已导出:[/bold #4EBA65] {audit_path}\n")
-        else:
-            break
