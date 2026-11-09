@@ -174,3 +174,35 @@ def test_gnina_mock_binary_e2e(tmp_path: Path, monkeypatch) -> None:
     assert result is not None
     assert result.poses[0].affinity == pytest.approx(-9.5)
     assert "CNNscore" in result.log
+
+
+def test_unidock_build_batch_cmd() -> None:
+    """Verifies UniDockEngine._build_batch_cmd builds exact --ligand_index and --dir CLI."""
+    eng = UniDockEngine()
+    box = Box(center=(10.5, 20.0, -5.2), size=(22.0, 24.0, 20.0))
+    params = DockParams(exhaustiveness=4, num_modes=9, scoring="vina", seed=2026)
+
+    cmd = eng._build_batch_cmd(
+        binary="unidock",
+        box=box,
+        params=params,
+        receptor_path="/path/rec.pdbqt",
+        ligand_index_path="/path/index.txt",
+        out_dir_path="/path/out_dir",
+    )
+
+    assert "--receptor" in cmd and cmd[cmd.index("--receptor") + 1] == "/path/rec.pdbqt"
+    assert "--ligand_index" in cmd and cmd[cmd.index("--ligand_index") + 1] == "/path/index.txt"
+    assert "--dir" in cmd and cmd[cmd.index("--dir") + 1] == "/path/out_dir"
+    assert "--search_mode" in cmd and cmd[cmd.index("--search_mode") + 1] == "fast"
+    assert "--num_modes" in cmd and cmd[cmd.index("--num_modes") + 1] == "9"
+    assert "--scoring" in cmd and cmd[cmd.index("--scoring") + 1] == "vina"
+    assert "--seed" in cmd and cmd[cmd.index("--seed") + 1] == "2026"
+
+    # Assert single-ligand / inapplicable flags are excluded
+    assert "--ligand" not in cmd
+    assert "--ligands" not in cmd
+    assert "--out" not in cmd
+    assert "--cpu" not in cmd
+    assert "--energy_range" not in cmd
+

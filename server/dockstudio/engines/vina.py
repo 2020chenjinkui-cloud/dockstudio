@@ -14,7 +14,7 @@ from pathlib import Path
 from ..config import Settings, get_settings, resolve_vina_binary
 from ..logging import get_logger
 from ..models import Box, DockingError, DockParams, DockResult, EngineUnavailableError, Pose
-from .base import EngineManifest
+from .base import BaseEngine, EngineManifest
 
 log = get_logger("engines.vina")
 
@@ -96,7 +96,7 @@ def _key_lines(text: str, limit: int = 5) -> str:
     return " | ".join(lines[-limit:]) if lines else "<no output>"
 
 
-class VinaEngine:
+class VinaEngine(BaseEngine):
     """Runs vina.exe via subprocess (no PyPI wheel on Windows)."""
 
     manifest = EngineManifest(
