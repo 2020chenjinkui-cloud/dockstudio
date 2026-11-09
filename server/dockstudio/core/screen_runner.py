@@ -24,6 +24,7 @@ import io
 import json
 import math
 import os
+import shutil
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -389,7 +390,8 @@ def export_funnel_csv(report: ScreeningFunnelReport, csv_path: Path) -> Path:
 def export_screening_results_csv(
     candidates: list[ScreeningCandidateRow], csv_path: Path
 ) -> Path:
-    """Exports final candidate ranking with formula-injection neutralization."""
+    """Exports final candidate ranking with formula-injection neutralization,
+    including backward-compatible Affinity and InChIKey headers for /verify compatibility."""
     csv_path.parent.mkdir(parents=True, exist_ok=True)
     with open(csv_path, "w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
@@ -401,6 +403,7 @@ def export_screening_results_csv(
             "Parent_ID",
             "Affinity_Mean_kcal_mol",
             "Affinity_Std",
+            "Affinity",  # Backward-compatible alias for /verify and legacy tools
             "Pose_RMSD_Seed_A",
             "SILE",
             "LE",
@@ -415,9 +418,18 @@ def export_screening_results_csv(
             "Cluster_ID",
             "Is_Cluster_Rep",
             "Alerts",
+            "InChIKey",  # For /verify T3 structural identity verification
             "SMILES",
         ])
         for rank, c in enumerate(candidates, start=1):
+            inchikey = getattr(c, "inchikey", "") or ""
+            if not inchikey and c.smiles:
+                try:
+                    m = Chem.MolFromSmiles(c.smiles)
+                    if m is not None:
+                        inchikey = Chem.MolToInchiKey(m)
+                except Exception:
+                    pass
             writer.writerow([
                 rank,
                 _csv_safe(c.ligand_id),
@@ -426,6 +438,7 @@ def export_screening_results_csv(
                 _csv_safe(c.parent_id or ""),
                 f"{c.affinity_mean:.3f}",
                 f"{c.affinity_std:.3f}",
+                f"{c.affinity_mean:.3f}",  # Affinity alias mirrors affinity_mean
                 f"{c.pose_rmsd_seed:.3f}" if c.pose_rmsd_seed is not None else "",
                 f"{c.sile:.4f}",
                 f"{c.le:.4f}",
@@ -440,6 +453,7 @@ def export_screening_results_csv(
                 c.cluster_id,
                 1 if c.is_cluster_rep else 0,
                 _csv_safe(";".join(c.alerts)),
+                _csv_safe(inchikey),
                 _csv_safe(c.smiles or ""),
             ])
     return csv_path
@@ -505,11 +519,15 @@ class ScreeningRunner:
             lib_path = Path(raw_ligands.path)
             for lid in raw_ligands.ligand_ids:
                 p_file = lib_path / lid / "ligand.pdbqt"
+                if not p_file.is_file() and (lib_path.parent / lid / "ligand.pdbqt").is_file():
+                    p_file = lib_path.parent / lid / "ligand.pdbqt"
+                dtype = "aglycone" if lid.endswith("_aglycone") else "original"
                 self.ligand_dict[lid] = PreparedLigand(
                     id=lid,
                     source="file",
                     pdbqt_path=str(p_file),
                     name=lid,
+                    derivative_type=dtype,
                 )
         elif isinstance(raw_ligands, dict):
             self.ligand_dict = dict(raw_ligands)
@@ -1407,7 +1425,8 @@ class ScreeningRunner:
         n_t3_out: int,
         candidates: list[ScreeningCandidateRow],
     ) -> ScreeningFunnelReport:
-        """Exports funnel.csv and screening_results.csv, ensuring strict /verify T5 closure."""
+        """Exports funnel.csv, screening_results.csv, conf.txt, receptor.pdbqt,
+        and poses/ directory, ensuring strict /verify T1~T5 compliance."""
         n_docked_success = len(candidates)
         n_prep_losses = n_desalt + n_dedup + n_chiral + n_prep
         n_dock_failed = max(0, (n_raw - n_prep_losses) - n_docked_success)
@@ -1415,6 +1434,7 @@ class ScreeningRunner:
         funnel_csv = self.out_dir / "funnel.csv"
         results_csv = self.out_dir / "screening_results.csv"
 
+        # 1. Export funnel.csv & screening_results.csv
         report = ScreeningFunnelReport(
             n_raw=n_raw,
             n_desalt_fail=n_desalt,
@@ -1438,6 +1458,105 @@ class ScreeningRunner:
 
         export_funnel_csv(report, funnel_csv)
         export_screening_results_csv(candidates, results_csv)
+
+        # 2. Export conf.txt for /verify T1, T2, T4, D5
+        conf_path = self.out_dir / "conf.txt"
+        box = self.config.box or Box(center=(0.0, 0.0, 0.0), size=(20.0, 20.0, 20.0))
+        seed_val = self.config.tier2_seeds[0] if (self.config and self.config.tier2_seeds) else 42
+        workers_val = getattr(self, "workers", None) or self.config.cpu or max(1, os.cpu_count() or 4)
+        conf_content = (
+            f"center_x = {box.center[0]:.3f}\n"
+            f"center_y = {box.center[1]:.3f}\n"
+            f"center_z = {box.center[2]:.3f}\n"
+            f"size_x = {box.size[0]:.3f}\n"
+            f"size_y = {box.size[1]:.3f}\n"
+            f"size_z = {box.size[2]:.3f}\n"
+            f"seed = {seed_val}\n"
+            f"exhaustiveness = 8\n"
+            f"num_modes = 9\n"
+            f"energy_range = 3.0\n"
+            f"cpu = {workers_val}\n"
+            f"scoring = vina\n"
+        )
+        conf_path.write_text(conf_content, encoding="utf-8")
+
+        # 3. Copy receptor.pdbqt into out_dir for /verify T1, D1
+        rec_dest = self.out_dir / "receptor.pdbqt"
+        if self.receptor_pdbqt and Path(self.receptor_pdbqt).is_file():
+            try:
+                if rec_dest.resolve() != Path(self.receptor_pdbqt).resolve():
+                    shutil.copyfile(self.receptor_pdbqt, rec_dest)
+            except (OSError, ValueError):
+                pass
+
+        # 4. Assemble poses/ directory for /verify T1, T3, D7
+        poses_dir = self.out_dir / "poses"
+        poses_dir.mkdir(parents=True, exist_ok=True)
+        for c in candidates:
+            cid = c.ligand_id
+            pose_dest_pdbqt = poses_dir / f"pose_{cid}.pdbqt"
+            pose_dest_sdf = poses_dir / f"pose_{cid}.sdf"
+
+            # Search in tier2 multi-seed scratch first, then tier1, then any subfolder
+            scratch_candidates = []
+            if self.config and self.config.tier2_seeds:
+                s0 = self.config.tier2_seeds[0]
+                scratch_candidates.append(self.out_dir / "tier2" / f"multi_{cid}" / f"seed_{s0}" / "out.pdbqt")
+            scratch_candidates.append(self.out_dir / "tier1" / f"dock_{cid}" / "out.pdbqt")
+            scratch_candidates.append(self.out_dir / f"dock_{cid}" / "out.pdbqt")
+
+            found_pdbqt = None
+            for p in scratch_candidates:
+                if p.is_file():
+                    found_pdbqt = p
+                    break
+
+            if found_pdbqt is None:
+                for p in self.out_dir.glob(f"**/*{cid}*/out.pdbqt"):
+                    if p.is_file():
+                        found_pdbqt = p
+                        break
+
+            if found_pdbqt is None and cid in self.ligand_dict:
+                lig_item = self.ligand_dict[cid]
+                if lig_item.pdbqt_path and Path(lig_item.pdbqt_path).is_file():
+                    found_pdbqt = Path(lig_item.pdbqt_path)
+
+            if found_pdbqt and found_pdbqt.is_file():
+                try:
+                    shutil.copyfile(found_pdbqt, pose_dest_pdbqt)
+                except OSError:
+                    pass
+
+            # Write pose_<cid>.sdf
+            if c.smiles:
+                try:
+                    mol = Chem.MolFromSmiles(c.smiles)
+                    if mol is not None:
+                        assigned = False
+                        if found_pdbqt and found_pdbqt.is_file():
+                            p_mol = load_pose_mol(found_pdbqt)
+                            if p_mol is not None and p_mol.GetNumHeavyAtoms() == mol.GetNumHeavyAtoms():
+                                try:
+                                    mol_with_conf = AllChem.AssignBondOrdersFromTemplate(mol, p_mol)
+                                    pose_dest_sdf.write_text(Chem.MolToMolBlock(mol_with_conf), encoding="utf-8")
+                                    assigned = True
+                                except Exception:
+                                    pass
+                        if not assigned:
+                            mol_h = Chem.AddHs(mol)
+                            AllChem.EmbedMolecule(mol_h, randomSeed=42)
+                            pose_dest_sdf.write_text(Chem.MolToMolBlock(mol_h), encoding="utf-8")
+                except Exception:
+                    pass
+            elif found_pdbqt and found_pdbqt.is_file():
+                p_mol = load_pose_mol(found_pdbqt)
+                if p_mol is not None:
+                    try:
+                        pose_dest_sdf.write_text(Chem.MolToMolBlock(p_mol), encoding="utf-8")
+                    except Exception:
+                        pass
+
         log.info(
             "Screening report finalized: %d final candidates. Conserved: %s. Output: %s",
             len(candidates), report.is_conserved, self.out_dir

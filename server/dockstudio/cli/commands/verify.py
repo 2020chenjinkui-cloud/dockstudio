@@ -212,9 +212,30 @@ def load_energy_table(energy_path: Path) -> list[dict[str, Any]]:
     # Standardize column extraction
     standardized: list[dict[str, Any]] = []
     for r in rows:
-        cid = r.get("id") or r.get("compound_id") or r.get("name") or r.get("cas") or ""
+        cid = (
+            r.get("id")
+            or r.get("ligand_id")
+            or r.get("compound_id")
+            or r.get("name")
+            or r.get("cas")
+            or ""
+        )
+        if str(cid).startswith("'"):
+            cid = str(cid)[1:]
+
         score_val = None
-        for score_key in ("affinity", "score", "energy", "binding_energy", "affinity (kcal/mol)", "vina_score"):
+        for score_key in (
+            "affinity",
+            "affinity_kcal_mol",
+            "affinity_mean_kcal_mol",
+            "affinity_mean",
+            "top_affinity_kcal_mol",
+            "score",
+            "energy",
+            "binding_energy",
+            "affinity (kcal/mol)",
+            "vina_score",
+        ):
             if score_key in r:
                 try:
                     score_val = float(r[score_key])
@@ -224,7 +245,13 @@ def load_energy_table(energy_path: Path) -> list[dict[str, Any]]:
         if score_val is None:
             continue
         smiles = r.get("smiles") or r.get("smi") or ""
+        if str(smiles).startswith("'"):
+            smiles = str(smiles)[1:]
+
         inchikey = r.get("inchikey") or r.get("inchi_key") or ""
+        if str(inchikey).startswith("'"):
+            inchikey = str(inchikey)[1:]
+
         standardized.append({
             "id": cid,
             "affinity": score_val,
