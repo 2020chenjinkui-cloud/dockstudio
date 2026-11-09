@@ -56,6 +56,7 @@ except ImportError:
 ALLOWED_ORGANIC_ELEMENTS = frozenset(
     {"H", "B", "C", "N", "O", "F", "Si", "P", "S", "Cl", "Se", "Br", "I"}
 )
+ALLOWED_COUNTERIONS = frozenset({"Na", "K", "Li", "Ca", "Mg"})
 
 _PAT_CATECHOL = Chem.MolFromSmarts("c1([OH])c([OH])cccc1")
 _PAT_QUINONE_P = Chem.MolFromSmarts("O=C1C=CC(=O)C=C1")
@@ -96,7 +97,16 @@ def desalt_and_filter(
     if mol is None:
         return None, "无效的分子对象 (None)"
 
-    # 1. Strip salts and crystal waters
+    # 1. Reject transition/heavy metals and disallowed elements upfront (before desalting)
+    raw_disallowed = sorted(
+        {atom.GetSymbol() for atom in mol.GetAtoms()}
+        - (ALLOWED_ORGANIC_ELEMENTS | ALLOWED_COUNTERIONS)
+    )
+    if raw_disallowed:
+        elem_str = ", ".join(raw_disallowed)
+        return None, f"含非有机/金属元素，不适用标准分子对接力场 (含: {elem_str})"
+
+    # 2. Strip salts and crystal waters
     try:
         remover = SaltRemover.SaltRemover()
         stripped = remover.StripMol(mol, dontRemoveEverything=True)
@@ -104,7 +114,7 @@ def desalt_and_filter(
         log.debug("SaltRemover exception: %s", exc)
         stripped = mol
 
-    # 2. Choose largest organic fragment
+    # 3. Choose largest organic fragment
     try:
         chooser = rdMolStandardize.LargestFragmentChooser(preferOrganic=True)
         chosen = chooser.choose(stripped)
@@ -114,13 +124,13 @@ def desalt_and_filter(
     if chosen is None or chosen.GetNumAtoms() == 0:
         return None, "脱盐后无有效分子结构"
 
-    # 3. Organic element whitelist verification
+    # 4. Organic element whitelist verification
     disallowed = sorted({atom.GetSymbol() for atom in chosen.GetAtoms()} - ALLOWED_ORGANIC_ELEMENTS)
     if disallowed:
         elem_str = ", ".join(disallowed)
         return None, f"含非有机/金属元素，不适用标准分子对接力场 (含: {elem_str})"
 
-    # 4. Heavy atom range verification
+    # 5. Heavy atom range verification
     n_heavy = chosen.GetNumHeavyAtoms()
     if n_heavy < min_heavy or n_heavy > max_heavy:
         return None, f"重原子数超出范围 [{min_heavy}, {max_heavy}] (当前: {n_heavy})"
@@ -241,7 +251,21 @@ def deglycosylate_tcm_mol(
 
     true_aglycones = []
     for f in frags:
+        # Identify attachment atoms that are aromatic nitrogen in a 5-membered ring
+        # (e.g. N9 of purine/adenosine/cordycepin, indole N, imidazole N)
+        for a in f.GetAtoms():
+            if a.GetAtomicNum() == 0:
+                for nbr in a.GetNeighbors():
+                    if nbr.GetSymbol() == "N" and nbr.GetIsAromatic() and nbr.IsInRingSize(5):
+                        nbr.SetBoolProp("_AromaticN_Capping", True)
+
         capped = Chem.DeleteSubstructs(f, Chem.MolFromSmiles("*"))
+
+        for a in capped.GetAtoms():
+            if a.HasProp("_AromaticN_Capping"):
+                a.SetNumExplicitHs(1)
+                a.ClearProp("_AromaticN_Capping")
+
         try:
             Chem.SanitizeMol(capped)
         except Exception:
