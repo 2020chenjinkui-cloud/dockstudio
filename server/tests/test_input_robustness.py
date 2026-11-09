@@ -40,9 +40,15 @@ def test_smiles_whitespace_truncated(client) -> None:
 
 
 def test_smiles_multi_component_hint(client) -> None:
-    resp = client.post("/api/prepare/ligand", data={"smiles": "CCO.O"})
+    resp = client.post("/api/prepare/ligand", data={"smiles": "CCO.c1ccccc1"})
     assert resp.status_code == 400
     assert "拆分" in resp.json()["detail"] or "." in resp.json()["detail"]
+
+
+def test_smiles_solvate_desalted(client) -> None:
+    resp = client.post("/api/prepare/ligand", data={"smiles": "CCO.O"})
+    assert resp.status_code == 200
+    assert resp.json()["smiles"] == "CCO"
 
 
 def test_smiles_nonascii_rejected(client) -> None:

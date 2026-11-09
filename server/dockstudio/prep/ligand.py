@@ -99,6 +99,22 @@ def prepare_ligand_from_smiles(
     if mol is None:
         raise PreparationError(f"RDKit 无法解析 SMILES：{smiles[:60]!r}")
 
+    # Detect genuine multi-component organic mixtures (excluding salts and solvates)
+    if "." in smiles:
+        try:
+            from rdkit.Chem.SaltRemover import SaltRemover
+            remover = SaltRemover()
+            stripped = remover.StripMol(mol, dontRemoveEverything=True)
+            frags = Chem.GetMolFrags(stripped, asMols=True)
+            substantial_frags = [f for f in frags if f.GetNumHeavyAtoms() >= min_heavy]
+            unique_species = {Chem.MolToSmiles(f) for f in substantial_frags}
+            if len(unique_species) > 1:
+                raise PreparationError("SMILES 含有多个独立组分（'.' 分隔），请先拆分，每次只提交单个组分。")
+        except PreparationError:
+            raise
+        except Exception as exc:
+            log.debug("Multi-component check bypassed due to error: %s", exc)
+
     # Intelligent desalting & organic element / size whitelist
     clean_mol, fail_reason = desalt_and_filter(mol, min_heavy=min_heavy, max_heavy=max_heavy)
     if clean_mol is None:
