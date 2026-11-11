@@ -17,7 +17,11 @@ from pathlib import Path
 from ..config import Settings, get_settings
 from ..engines import available_engines
 from ..models import Box, DockParams
-from .agent import run_agent_repl
+from .agent import (
+    run_agent_repl,
+    run_screen_cli,
+    screen_args_need_cli,
+)
 
 
 def _cmd_engines() -> int:
@@ -148,12 +152,23 @@ def _build_parser() -> argparse.ArgumentParser:
     dock_p.add_argument("--demo", action="store_true", help="使用内置 1HSG 示例运行向导")
 
     # 6. screen
-    screen_p = sub.add_parser("screen", help="启动高通量虚拟筛选向导 (GPU Uni-Dock / 多进程)")
-    screen_p.add_argument("--demo", action="store_true", help="使用内置 1HSG + 示例药物分子库运行向导")
+    # Bare `screen` / `screen --demo` stay on the legacy interactive wizard; every other
+    # flag (18 non-interactive filter options) is forwarded verbatim to click's
+    # `screen_cli` from `main()` instead of being parsed here.
+    screen_p = sub.add_parser(
+        "screen",
+        help="启动高通量虚拟筛选 (交互向导, 或 --non-interactive 无头全参数模式)",
+    )
+    screen_p.add_argument(
+        "--demo", "-d", action="store_true", help="使用内置 1HSG + 示例药物分子库运行向导"
+    )
 
     # 7. verify
     verify_p = sub.add_parser("verify", help="运行 T1~T5 自动化交付物数值验收套件")
     verify_p.add_argument("path", help="待核算交付包路径 (目录或 .zip 压缩包)")
+    verify_p.add_argument(
+        "--recalculate", "-r", action="store_true", help="调用本地 Vina 引擎执行 T1/T2 真实重对接验算"
+    )
 
     # 8. audit
     audit_p = sub.add_parser("audit", help="查看不可篡改事件链与 SHA256 完整性指纹")
@@ -182,6 +197,16 @@ def main(argv: Sequence[str] | None = None) -> int:
             return run_agent_repl()
         parser.print_help()
         return 0
+
+    # `dockstudio screen` owns click's full 18-option non-interactive surface
+    # (--receptor / --library / --box-center / --tcm-mode / --anchor-residues /
+    # --tier1-ratio / --tier2-ratio / --seeds / --strain-threshold / --engine / --cpu /
+    # --cpu-per-job / --resume / --out / --non-interactive ...).  Forward any argument
+    # vector that goes beyond the bare wizard flags (--demo / -d) verbatim to `screen_cli`
+    # before argparse sees it, so no filter flag is rejected or lost and
+    # `dockstudio screen --help` renders click's complete option list.
+    if args_list[0] == "screen" and screen_args_need_cli(args_list[1:]):
+        return run_screen_cli(args_list[1:], prog_name="dockstudio screen")
 
     args = parser.parse_args(args_list)
 
@@ -226,13 +251,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         return run_dock_interactive(demo=args.demo)
 
     if args.command == "screen":
+        # Only reached for bare `dockstudio screen` / `dockstudio screen --demo|-d`:
+        # every richer argument vector was already delegated to click's `screen_cli` above.
         from .commands.screen import run_screen_interactive
         return run_screen_interactive(demo=args.demo)
 
     if args.command == "verify":
         from .commands.verify import run_verify
         target_path = Path(args.path).expanduser().resolve()
-        return run_verify(target_path)
+        opts = {"recalculate": True} if getattr(args, "recalculate", False) else None
+        return run_verify(target_path, options=opts)
 
     if args.command == "audit":
         if args.markdown:

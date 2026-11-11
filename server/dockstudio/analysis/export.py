@@ -4,8 +4,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from openbabel import pybel
 from rdkit import Chem
+from rdkit.Chem.MolStandardize import rdMolStandardize as _rdMolStandardize  # noqa: F401
+from openbabel import pybel  # isort: skip  # noqa: I001 - must load after rdkit on Linux
 
 from ..logging import get_logger
 from ..models import DockingError

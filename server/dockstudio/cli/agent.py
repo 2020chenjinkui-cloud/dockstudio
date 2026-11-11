@@ -15,7 +15,7 @@ import shlex
 import subprocess
 import sys
 import time
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from pathlib import Path
 from typing import Any, ClassVar
 
@@ -62,6 +62,117 @@ def cleanup_active_processes() -> None:
     ACTIVE_PROCESSES.clear()
 
 
+# ---------------------------------------------------------------------------
+# `/screen` -> click `screen_cli` argument forwarding (P0-3 / Task Fix 6)
+# ---------------------------------------------------------------------------
+
+#: Flags that (alone) keep `/screen` and `dockstudio screen` on the interactive wizard.
+SCREEN_WIZARD_FLAGS: frozenset[str] = frozenset({"--demo", "-d"})
+
+#: Full non-interactive filter surface owned by `screen_cli` (used for Tab completion).
+SCREEN_CLI_OPTIONS: tuple[tuple[str, str], ...] = (
+    ("--receptor", "受体蛋白结构文件路径 (PDB/mmCIF/PDBQT)"),
+    ("-r", "受体蛋白结构文件路径 (简写)"),
+    ("--library", "待筛选化合物库文件路径 (SMILES/SDF/CSV)"),
+    ("-l", "待筛选化合物库文件路径 (简写)"),
+    ("--box-center", "搜索盒中心坐标 (\"x,y,z\")"),
+    ("--box-size", "搜索盒三维边长 (\"sx,sy,sz\" 或单一数值)"),
+    ("--tcm-mode", "启用中药单体双轨比对模式"),
+    ("--no-tcm-mode", "关闭中药单体双轨比对模式"),
+    ("--anchor-residues", "口袋锚定残基列表 (\"ASP25:A,THR80:A\")"),
+    ("--tier1-ratio", "Tier 1 快速粗筛晋级比例"),
+    ("--tier2-ratio", "Tier 2 平衡精筛晋级比例"),
+    ("--seeds", "Tier 2 多 seed 随机种子列表 (\"42,1024,2026\")"),
+    ("--strain-threshold", "内部构象张力能惩罚上限 (kcal/mol)"),
+    ("--engine", "对接计算引擎 (auto/vina/unidock/gnina)"),
+    ("-e", "对接计算引擎 (简写)"),
+    ("--cpu", "分配的总 CPU 逻辑核心数"),
+    ("-c", "分配的总 CPU 逻辑核心数 (简写)"),
+    ("--cpu-per-job", "每个 Worker 进程的 CPU 线程数"),
+    ("--resume", "从 checkpoint.jsonl 断点恢复筛选"),
+    ("--no-resume", "忽略断点文件，从头开始筛选"),
+    ("--out", "筛选产出与交付包目录"),
+    ("-o", "筛选产出与交付包目录 (简写)"),
+    ("--enable-gnina-rescore", "Tier 3 启用 GNINA CNN 正交重打分"),
+    ("--no-gnina-rescore", "Tier 3 关闭 GNINA CNN 重打分"),
+    ("--non-interactive", "非交互/无头模式 (参数不全直接报错退出)"),
+    ("--demo", "在内置 1HSG 蛋白酶上运行端到端演示"),
+    ("-d", "在内置 1HSG 蛋白酶上运行端到端演示 (简写)"),
+)
+
+#: `/screen` options that consume a filesystem path -> `PathCompleter` delegation.
+SCREEN_CLI_PATH_OPTIONS: frozenset[str] = frozenset(
+    {"--receptor", "-r", "--library", "-l", "--out", "-o"}
+)
+
+#: `/screen` options that consume a free-form, non-path value (numbers / comma lists).
+SCREEN_CLI_VALUE_OPTIONS: frozenset[str] = frozenset(
+    {
+        "--box-center",
+        "--box-size",
+        "--anchor-residues",
+        "--tier1-ratio",
+        "--tier2-ratio",
+        "--seeds",
+        "--strain-threshold",
+        "--engine",
+        "-e",
+        "--cpu",
+        "-c",
+        "--cpu-per-job",
+    }
+)
+
+#: Value suggestions for `--engine` / `-e`.
+SCREEN_CLI_ENGINE_CHOICES: tuple[tuple[str, str], ...] = (
+    ("auto", "自动选择 (GPU 可用时 unidock, 否则 vina)"),
+    ("vina", "AutoDock Vina (CPU 多进程)"),
+    ("unidock", "Uni-Dock (GPU 批量加速)"),
+    ("gnina", "GNINA (CNN 正交重打分)"),
+)
+
+
+def screen_demo_requested(args: Sequence[str]) -> bool:
+    """True when the given `/screen` argument vector asks for the bundled demo."""
+    return any(arg in SCREEN_WIZARD_FLAGS for arg in args)
+
+
+def screen_args_need_cli(args: Sequence[str]) -> bool:
+    """True when `/screen` arguments go beyond the bare wizard flags (`--demo` / `-d`).
+
+    Such invocations must be forwarded verbatim to click's `screen_cli`; they must never
+    be silently downgraded to the interactive wizard (report P0-3.2).
+    """
+    return any(arg not in SCREEN_WIZARD_FLAGS for arg in args)
+
+
+def run_screen_cli(args: Sequence[str], prog_name: str = "/screen") -> int:
+    """Forward a complete `/screen` argument vector to click's `screen_cli`.
+
+    Uses ``standalone_mode=False`` so click raises instead of calling ``sys.exit``; the
+    resulting ``SystemExit`` (``screen_cli`` calls ``sys.exit(rc)``) and ``ClickException``
+    (bad option value) are both coerced back into a plain integer exit status.
+    """
+    from click.exceptions import Abort, ClickException
+
+    from .commands.screen import screen_cli
+
+    # Old argparse-based `dockstudio screen -h` printed help; keep `-h` working on click too.
+    forwarded = ["--help" if token == "-h" else token for token in args]
+    try:
+        rc = screen_cli.main(args=forwarded, prog_name=prog_name, standalone_mode=False)
+    except SystemExit as exc:  # validation failures inside screen_cli
+        if exc.code is None:
+            return 0
+        return exc.code if isinstance(exc.code, int) else 1
+    except ClickException as exc:  # unknown option / bad value / extra argument
+        exc.show()
+        return exc.exit_code
+    except Abort:  # Ctrl+C / EOF surfaced through click
+        return 130
+    return rc if isinstance(rc, int) else 0
+
+
 class SlashCompleter(Completer):
     """Completer for DockStudio slash commands with parameter path delegation."""
 
@@ -82,6 +193,62 @@ class SlashCompleter(Completer):
     def __init__(self) -> None:
         self.path_completer = PathCompleter(expanduser=True)
 
+    def _screen_completions(
+        self, arg_text: str, complete_event: CompleteEvent
+    ) -> Iterable[Completion]:
+        """Complete `/screen` option names, delegating path-valued options to PathCompleter."""
+        tokens = arg_text.split()
+        # A trailing space means the current token is already finished, so the *previous*
+        # token decides what may come next.
+        if arg_text == "" or arg_text.endswith(" "):
+            previous = tokens[-1] if tokens else ""
+            if previous in SCREEN_CLI_PATH_OPTIONS:
+                empty_doc = Document("", 0)
+                yield from self.path_completer.get_completions(empty_doc, complete_event)
+                return
+            engine_choices = SCREEN_CLI_ENGINE_CHOICES if previous in ("--engine", "-e") else ()
+            for value, description in engine_choices:
+                yield Completion(value, start_position=0, display=value, display_meta=description)
+            if engine_choices or previous in SCREEN_CLI_VALUE_OPTIONS:
+                # Free-form value expected (number / comma list): options would be noise.
+                return
+            for option, description in SCREEN_CLI_OPTIONS:
+                yield Completion(
+                    option,
+                    start_position=0,
+                    display=option,
+                    display_meta=description,
+                )
+            return
+
+        current = tokens[-1]
+        if current.startswith("-"):
+            for option, description in SCREEN_CLI_OPTIONS:
+                if option.startswith(current):
+                    yield Completion(
+                        option,
+                        start_position=-len(current),
+                        display=option,
+                        display_meta=description,
+                    )
+            return
+
+        previous = tokens[-2] if len(tokens) >= 2 else ""
+        # Completing the value of a path-valued option (e.g. `/screen --receptor /data/1hs`).
+        if previous in SCREEN_CLI_PATH_OPTIONS:
+            value_doc = Document(current, len(current))
+            yield from self.path_completer.get_completions(value_doc, complete_event)
+            return
+        if previous in ("--engine", "-e"):
+            for value, description in SCREEN_CLI_ENGINE_CHOICES:
+                if value.startswith(current):
+                    yield Completion(
+                        value,
+                        start_position=-len(current),
+                        display=value,
+                        display_meta=description,
+                    )
+
     def get_completions(
         self, document: Document, complete_event: CompleteEvent
     ) -> Iterable[Completion]:
@@ -91,9 +258,14 @@ class SlashCompleter(Completer):
         if " " in text:
             parts = text.split(maxsplit=1)
             cmd = parts[0].lower()
-            if cmd in ("/verify", "/view", "verify", "view"):
-                arg_text = parts[1] if len(parts) > 1 else ""
+            arg_text = parts[1] if len(parts) > 1 else ""
 
+            # `/screen` takes the full 18-option non-interactive filter surface.
+            if cmd in ("/screen", "screen"):
+                yield from self._screen_completions(arg_text, complete_event)
+                return
+
+            if cmd in ("/verify", "/view", "verify", "view"):
                 # Handle optional flags for /view (e.g. /view --ascii <path> or /view -a <path>)
                 if cmd in ("/view", "view"):
                     if arg_text.startswith("-") and " " not in arg_text:
@@ -333,11 +505,16 @@ def _dispatch_command(
         return run_dock_interactive(demo=demo_flag)
 
     if cmd == "/screen":
-        from .commands.screen import run_screen_interactive
-
-        demo_flag = "--demo" in args or "-d" in args
+        demo_flag = screen_demo_requested(args)
         if workspace:
             workspace.prepare_command_canvas(show_header=False)
+        # Anything beyond the bare wizard flags is forwarded verbatim to click's
+        # `screen_cli` (--receptor/--library/--tcm-mode/.../--non-interactive); it must
+        # never be silently downgraded to the interactive wizard (report P0-3.2).
+        if screen_args_need_cli(args):
+            return run_screen_cli(args, prog_name="/screen")
+        from .commands.screen import run_screen_interactive
+
         return run_screen_interactive(demo=demo_flag)
 
     if cmd == "/prep":
@@ -372,14 +549,16 @@ def _dispatch_command(
         from .commands.verify import run_verify
         from .ui import prompt_path
 
-        path_str = args[0] if args else None
+        recalc = any(a in ("--recalculate", "-r") for a in args)
+        pos_args = [a for a in args if not a.startswith("-")]
+        path_str = pos_args[0] if pos_args else None
         if not path_str:
             target_path = prompt_path("请输入待核算交付包路径 (目录或 .zip)")
         else:
             target_path = Path(path_str).expanduser().resolve()
         if workspace:
             workspace.prepare_command_canvas(show_header=True)
-        return run_verify(target_path)
+        return run_verify(target_path, options={"recalculate": True} if recalc else None)
 
     if cmd == "/audit":
         from prompt_toolkit import prompt as pt_prompt

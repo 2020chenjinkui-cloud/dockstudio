@@ -20,6 +20,37 @@ from .vina import VinaEngine, _key_lines, annotate_error, parse_vina_out
 log = get_logger("engines.unidock")
 
 
+def _normalize_batch_output(matched_file: Path, lig_run_dir: Path) -> Path:
+    """Archive one Uni-Dock batch output as ``<lig_run_dir>/out.pdbqt``.
+
+    Uni-Dock's GPU batch mode dumps everything into a single shared ``--dir``
+    (``<work_dir>/dock_out/<ligand_id>_out.pdbqt``), which leaves downstream
+    consumers looking for ``Path(run_dir) / "out.pdbqt"`` with nothing to read
+    (P1-4). Every successful ligand therefore gets the same layout as
+    ``VinaEngine.dock()`` / ``BaseEngine.dock_batch()``; the raw dump in
+    ``dock_out`` is intentionally **left untouched** so legacy globbing still
+    works.
+
+    Returns the path that actually holds the poses (``<lig_run_dir>/out.pdbqt``,
+    or ``matched_file`` itself if the archive could not be written).
+    """
+    target = Path(lig_run_dir) / "out.pdbqt"
+    try:
+        lig_run_dir.mkdir(parents=True, exist_ok=True)
+        if target.resolve() == Path(matched_file).resolve():
+            return target
+        if target.exists():
+            target.unlink()
+        try:
+            os.link(matched_file, target)  # same filesystem: zero-copy
+        except OSError:
+            shutil.copy2(matched_file, target)
+        return target
+    except OSError as exc:  # pragma: no cover - permission/disk issues
+        log.warning("unidock batch: could not archive %s as %s: %s", matched_file, target, exc)
+        return Path(matched_file)
+
+
 class UniDockEngine(VinaEngine):
     """Uni-Dock: GPU-batched molecular docking."""
 
@@ -284,26 +315,27 @@ class UniDockEngine(VinaEngine):
         except OSError as exc:
             raise EngineUnavailableError(f"failed to launch unidock: {exc}") from exc
 
-        with self._lock:
-            self._current = proc
+        self._register_proc(proc)
 
         # Timeout scaling for large batches
         batch_timeout = max(self.settings.job_timeout_s, len(valid_items) * 10)
         try:
             stdout, stderr = proc.communicate(timeout=batch_timeout)
         except subprocess.TimeoutExpired as exc:
-            self.cancel_current()
+            # Drop it from the table first so the same pid is never killed twice,
+            # then terminate only this batch process (sibling workers keep going).
+            self._unregister_proc(proc)
+            self._terminate_proc(proc)
             raise DockingError(
                 f"unidock batch timed out after {batch_timeout}s for {len(valid_items)} ligands"
             ) from exc
         finally:
-            with self._lock:
-                if self._current is proc:
-                    self._current = None
+            self._unregister_proc(proc)
 
         run_log = (stdout or "") + "\n--- stderr ---\n" + (stderr or "")
 
-        # 9. Parse output files from out_dir
+        # 9. Parse output files from out_dir and normalize each ligand's output
+        #    to the standard `<run_dir>/out.pdbqt` layout (P1-4).
         results: dict[str, DockResult] = {}
         for lig_id, _ in valid_items:
             # Candidate output paths in order of preference
@@ -326,8 +358,11 @@ class UniDockEngine(VinaEngine):
                 log.warning("unidock batch: output file missing for ligand %s", lig_id)
                 continue
 
+            lig_run_dir = work_dir / f"dock_{lig_id}"
+            out_pose = _normalize_batch_output(matched_file, lig_run_dir)
+
             try:
-                poses = parse_vina_out(matched_file)
+                poses = parse_vina_out(out_pose)
                 results[lig_id] = DockResult(
                     engine=self.manifest.name,
                     engine_version=version,
@@ -335,7 +370,7 @@ class UniDockEngine(VinaEngine):
                     box=box,
                     poses=poses,
                     log=f"Uni-Dock GPU batch output for {lig_id}",
-                    run_dir=str(out_dir),
+                    run_dir=str(lig_run_dir),
                 )
             except Exception as exc:
                 log.warning("unidock batch: failed to parse poses for ligand %s: %s", lig_id, exc)

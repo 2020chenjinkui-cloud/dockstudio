@@ -425,6 +425,13 @@ def render_screening_leaderboard(
                     badge_items.append("[bold #FFC107]Tannin[/]")
                 elif "pains" in al_lower or "brenk" in al_lower:
                     badge_items.append("[bold #FF6B80]PAINS[/]")
+                elif "posecheck" in al_lower:
+                    # Real pose-geometry QC diagnostics (P1-5) instead of a hard-coded
+                    # "always pass" verdict; without this branch the 8-char fallback
+                    # would render the useless "POSECHEC".
+                    badge_items.append("[bold #FF6B80]PoseQC[/]")
+                elif "high_strain" in al_lower or "unconverged" in al_lower:
+                    badge_items.append("[bold #FF6B80]QC-降级[/]")
                 else:
                     badge_items.append(f"[#FFC107]{alert[:8]}[/]")
             badge_str = " ".join(badge_items)
@@ -497,18 +504,38 @@ def _resolve_receptor_files(receptor_path: Path, settings: Any) -> tuple[Path, P
 
     if receptor_path.suffix.lower() == ".pdbqt":
         rec_pdbqt = receptor_path
-        rec_pdb = receptor_path.with_suffix(".pdb") if receptor_path.with_suffix(".pdb").is_file() else None
+        rec_dir = receptor_path.parent
+        if (rec_dir / "receptor_protein.pdb").is_file():
+            rec_pdb = rec_dir / "receptor_protein.pdb"
+        elif (rec_dir / "receptor_clean.pdb").is_file():
+            rec_pdb = rec_dir / "receptor_clean.pdb"
+        elif receptor_path.with_suffix(".pdb").is_file():
+            rec_pdb = receptor_path.with_suffix(".pdb")
+        else:
+            rec_pdb = None
         rec_id = receptor_path.stem
         rec_obj = None
     elif receptor_path.with_suffix(".pdbqt").is_file():
         rec_pdbqt = receptor_path.with_suffix(".pdbqt")
-        rec_pdb = receptor_path
+        rec_dir = rec_pdbqt.parent
+        if (rec_dir / "receptor_protein.pdb").is_file():
+            rec_pdb = rec_dir / "receptor_protein.pdb"
+        elif (rec_dir / "receptor_clean.pdb").is_file():
+            rec_pdb = rec_dir / "receptor_clean.pdb"
+        else:
+            rec_pdb = receptor_path
         rec_id = receptor_path.stem
         rec_obj = None
     else:
         rec_obj = prepare_receptor(receptor_path.read_bytes(), receptor_path.name, rec_out)
         rec_pdbqt = Path(rec_obj.pdbqt_path)
-        rec_pdb = receptor_path
+        rec_dir = rec_pdbqt.parent
+        if (rec_dir / "receptor_protein.pdb").is_file():
+            rec_pdb = rec_dir / "receptor_protein.pdb"
+        elif (rec_dir / "receptor_clean.pdb").is_file():
+            rec_pdb = rec_dir / "receptor_clean.pdb"
+        else:
+            rec_pdb = receptor_path
         rec_id = rec_obj.id
 
     return rec_pdbqt, rec_pdb, rec_id, rec_obj

@@ -6,7 +6,7 @@ import os
 from typing import Literal
 
 from rdkit import Chem
-from rdkit.Chem import AllChem, Descriptors, QED, SaltRemover
+from rdkit.Chem import AllChem, Descriptors, QED
 from rdkit.Chem.EnumerateStereoisomers import EnumerateStereoisomers, StereoEnumerationOptions
 from rdkit.Chem.FilterCatalog import FilterCatalog, FilterCatalogParams
 from rdkit.Chem.MolStandardize import rdMolStandardize
@@ -58,6 +58,131 @@ ALLOWED_ORGANIC_ELEMENTS = frozenset(
 )
 ALLOWED_COUNTERIONS = frozenset({"Na", "K", "Li", "Ca", "Mg"})
 
+# ---------------------------------------------------------------------------
+# Pharmaceutical counter-ions / inorganic ions / crystallization solvents (P1-2)
+# ---------------------------------------------------------------------------
+# The pharmaceutical salt/solvate forms in real TCM & drug libraries are built from
+# a small, well-known family of acids and solvents.  All entries below are stored as
+# *neutral, stereo-free canonical SMILES keys* so that the charged salt form
+# (e.g. tartrate dianion, mesylate anion) and the free acid map onto one key.
+
+#: Mineral acids / organic acids used as pharmaceutical counter-ions.
+_ACID_COUNTERION_SOURCE: tuple[str, ...] = (
+    # inorganic mineral acids: sulfate, phosphate, nitrate, carbonate
+    "O=S(=O)(O)O",
+    "O=P(O)(O)O",
+    "O=[N+]([O-])O",
+    "O=C(O)O",
+    # aliphatic / aromatic organic acids
+    "CC(=O)O",                     # acetic
+    "O=C(O)C(F)(F)F",              # trifluoroacetic
+    "CS(=O)(=O)O",                 # methanesulfonic (mesylate)
+    "CCS(=O)(=O)O",                # ethanesulfonic (esylate)
+    "O=S(=O)(O)c1ccccc1",          # benzenesulfonic (besylate)
+    "Cc1ccc(S(=O)(=O)O)cc1",       # p-toluenesulfonic (tosylate)
+    "O=C(O)C(=O)O",                # oxalic
+    "O=C(O)CC(=O)O",               # malonic
+    "O=C(O)CCC(=O)O",              # succinic
+    "O=C(O)C=CC(=O)O",             # maleic / fumaric
+    "O=C(O)CC(O)C(=O)O",           # malic
+    "O=C(O)C(O)C(O)C(=O)O",        # tartaric
+    "O=C(O)CC(O)(CC(=O)O)C(=O)O",  # citric
+    "CC(O)C(=O)O",                 # lactic
+    "O=C(O)C(O)C(O)C(O)C(O)CO",    # gluconic
+)
+
+#: Crystallization solvents frequently found as solvates / hydrates.
+_SOLVENT_SOURCE: tuple[str, ...] = (
+    "O",           # water
+    "CO",          # methanol
+    "CCO",         # ethanol
+    "CC(C)O",      # isopropanol
+    "CC(=O)C",     # acetone
+    "CC#N",        # acetonitrile
+    "CS(=O)C",     # DMSO
+    "CN(C)C=O",    # DMF
+    "ClCCl",       # dichloromethane
+    "ClC(Cl)Cl",   # chloroform
+)
+
+#: Inorganic ions & halides.
+_INORGANIC_ION_SOURCE: tuple[str, ...] = (
+    "[Na+]", "[K+]", "[Li+]", "[Ca+2]", "[Mg+2]", "[Zn+2]", "[NH4+]",
+    "[F-]", "[Cl-]", "[Br-]", "[I-]", "Cl", "Br", "I",
+)
+
+#: Fragments at or above this heavy-atom count are "substantial" organic
+#: components when deciding whether a multi-fragment input is a real mixture.
+MIN_SUBSTANTIAL_FRAGMENT_HEAVY = 3
+
+_STANDARDIZER_UNCHARGER = rdMolStandardize.Uncharger()
+
+
+def _neutral_smiles_key(mol: Chem.Mol | None) -> str | None:
+    """Canonical, stereo-free, uncharged SMILES key used for whitelist matching."""
+    if mol is None or mol.GetNumAtoms() == 0:
+        return None
+    work = Chem.Mol(mol)
+    if any(atom.GetAtomicNum() == 1 for atom in work.GetAtoms()):
+        try:
+            work = Chem.RemoveHs(work)
+        except Exception as exc:  # pragma: no cover - defensive
+            log.debug("RemoveHs failed on fragment: %s", exc)
+    try:
+        work = _STANDARDIZER_UNCHARGER.uncharge(work)
+    except Exception as exc:  # pragma: no cover - defensive
+        log.debug("Uncharger failed on fragment: %s", exc)
+    try:
+        return Chem.MolToSmiles(work, isomericSmiles=False)
+    except Exception:  # pragma: no cover - defensive
+        return None
+
+
+def _keys_of(smiles_source: tuple[str, ...]) -> frozenset[str]:
+    keys: set[str] = set()
+    for smiles in smiles_source:
+        parsed = Chem.MolFromSmiles(smiles)
+        if parsed is None:  # pragma: no cover - static table is valid
+            log.debug("counter-ion/solvent SMILES unparsable: %s", smiles)
+            continue
+        key = _neutral_smiles_key(parsed)
+        if key:
+            keys.add(key)
+    return frozenset(keys)
+
+
+_ACID_COUNTERION_KEYS: frozenset[str] = _keys_of(_ACID_COUNTERION_SOURCE)
+_SOLVENT_KEYS: frozenset[str] = _keys_of(_SOLVENT_SOURCE)
+_INORGANIC_ION_KEYS: frozenset[str] = _keys_of(_INORGANIC_ION_SOURCE)
+
+#: Public contract (HVTS_FIX_CONTRACT.md §3.1): neutral, stereo-free canonical
+#: SMILES of all pharmaceutical counter-ions, inorganic ions and crystal solvents.
+PHARMACEUTICAL_COUNTERIONS_AND_SOLVENTS: frozenset[str] = frozenset(
+    _ACID_COUNTERION_KEYS | _SOLVENT_KEYS | _INORGANIC_ION_KEYS
+)
+
+
+def _is_inorganic_fragment(frag_mol: Chem.Mol) -> bool:
+    """True for inorganic ions / mineral acids (no carbon skeleton) or <= 2 heavy atoms."""
+    if frag_mol is None:
+        return True
+    if frag_mol.GetNumHeavyAtoms() <= 2:
+        return True
+    return not any(atom.GetSymbol() == "C" for atom in frag_mol.GetAtoms())
+
+
+def is_counterion_or_solvent(frag_mol: Chem.Mol) -> bool:
+    """Whether a single fragment is a pharmaceutical counter-ion, an inorganic
+    ion / mineral acid, a common crystallization solvent, or has <= 2 heavy atoms."""
+    if frag_mol is None or frag_mol.GetNumAtoms() == 0:
+        return True
+    if _is_inorganic_fragment(frag_mol):
+        return True
+    key = _neutral_smiles_key(frag_mol)
+    if key is None:  # pragma: no cover - defensive
+        return False
+    return key in PHARMACEUTICAL_COUNTERIONS_AND_SOLVENTS
+
 _PAT_CATECHOL = Chem.MolFromSmarts("c1([OH])c([OH])cccc1")
 _PAT_QUINONE_P = Chem.MolFromSmarts("O=C1C=CC(=O)C=C1")
 _PAT_QUINONE_O = Chem.MolFromSmarts("O=C1C(=O)C=CC=C1")
@@ -81,16 +206,99 @@ def _get_filter_catalog() -> FilterCatalog:
     return _FILTER_CATALOG
 
 
+def _select_core_fragment(mol: Chem.Mol) -> tuple[Chem.Mol | None, str | None]:
+    """Split a (possibly multi-fragment) molecule into its single bioactive core.
+
+    Policy (pharmaceutical salt/solvate aware):
+    1. inorganic ions / mineral acids / halides / water are always dropped;
+    2. pharmaceutical acid counter-ions (tartrate, citrate, maleate, mesylate, ...)
+       are dropped whenever a parent organic core survives;
+    3. neutral crystallization solvents (EtOH, iPrOH, acetone, MeCN, DMSO, DMF, ...)
+       are dropped only when they are clearly smaller than the main component;
+    4. if >= 2 distinct substantial organic fragments survive, the input is a genuine
+       multi-component active mixture -> ``(None, "multi_component_mixture")``.
+    """
+    try:
+        frags = [f for f in Chem.GetMolFrags(mol, asMols=True) if f.GetNumAtoms() > 0]
+    except Exception as exc:  # pragma: no cover - defensive
+        log.debug("fragment split failed: %s", exc)
+        return mol, None
+    if len(frags) <= 1:
+        return (frags[0] if frags else mol), None
+
+    # (1) inorganic ions / mineral acids / water / halides
+    organics = [f for f in frags if not _is_inorganic_fragment(f)]
+    if not organics:
+        # Degenerate input made only of inorganic/solvate pieces: keep them so the
+        # heavy-atom range check below can report an informative failure.
+        organics = list(frags)
+
+    # (2)+(3) pharmaceutical acid counter-ions and small neutral solvents
+    if len(organics) > 1:
+        main_heavy = max(f.GetNumHeavyAtoms() for f in organics)
+        kept: list[Chem.Mol] = []
+        for frag in organics:
+            heavy = frag.GetNumHeavyAtoms()
+            key = _neutral_smiles_key(frag)
+            if key is not None and key in _ACID_COUNTERION_KEYS and heavy < main_heavy:
+                continue
+            if key is not None and key in _SOLVENT_KEYS and 2 * heavy < main_heavy:
+                continue
+            kept.append(frag)
+        if kept:
+            organics = kept
+
+    # (4) genuine multi-component active mixture detection (stereo-aware dedup)
+    unique: dict[str, Chem.Mol] = {}
+    for frag in organics:
+        try:
+            species_key = Chem.MolToSmiles(frag)
+        except Exception:  # pragma: no cover - defensive
+            species_key = f"frag_{len(unique)}_{frag.GetNumAtoms()}_{frag.GetNumHeavyAtoms()}"
+        if (
+            species_key not in unique
+            or frag.GetNumHeavyAtoms() > unique[species_key].GetNumHeavyAtoms()
+        ):
+            unique[species_key] = frag
+    core_frags = list(unique.values())
+    substantial = [
+        f for f in core_frags if f.GetNumHeavyAtoms() >= MIN_SUBSTANTIAL_FRAGMENT_HEAVY
+    ]
+    if len(substantial) >= 2:
+        log.info(
+            "rejecting genuine multi-component mixture: %d substantial organic fragments",
+            len(substantial),
+        )
+        return None, "multi_component_mixture"
+    if not core_frags:
+        return None, "脱盐后无有效分子结构"
+
+    combined = core_frags[0]
+    try:
+        for extra in core_frags[1:]:
+            combined = Chem.CombineMols(combined, extra)
+        chooser = rdMolStandardize.LargestFragmentChooser(preferOrganic=True)
+        chosen = chooser.choose(combined)
+    except Exception as exc:
+        return None, f"脱盐与母核选择失败: {exc}"
+    if chosen is None or chosen.GetNumAtoms() == 0:
+        return None, "脱盐后无有效分子结构"
+    return chosen, None
+
+
 def desalt_and_filter(
     mol: Chem.Mol,
     min_heavy: int = 5,
     max_heavy: int = 120,
 ) -> tuple[Chem.Mol | None, str | None]:
-    """Strips non-covalent salts, waters, and solvates.
+    """Strips non-covalent salts, crystal waters, solvates and organic counter-ions.
 
     Rejects molecules containing non-organic or heavy metal elements outside the whitelist
     {H, B, C, N, O, F, Si, P, S, Cl, Se, Br, I}.
     Rejects molecules with heavy atom counts outside [min_heavy, max_heavy].
+    Rejects genuine multi-component active mixtures with the failure reason literal
+    ``"multi_component_mixture"`` (pharmaceutical organic salts are *not* mixtures:
+    tartrate / citrate / maleate / mesylate / oxalate / acetate are stripped instead).
 
     Returns (clean_mol, failure_reason).
     """
@@ -106,31 +314,20 @@ def desalt_and_filter(
         elem_str = ", ".join(raw_disallowed)
         return None, f"含非有机/金属元素，不适用标准分子对接力场 (含: {elem_str})"
 
-    # 2. Strip salts and crystal waters
-    try:
-        remover = SaltRemover.SaltRemover()
-        stripped = remover.StripMol(mol, dontRemoveEverything=True)
-    except Exception as exc:
-        log.debug("SaltRemover exception: %s", exc)
-        stripped = mol
-
-    # 3. Choose largest organic fragment
-    try:
-        chooser = rdMolStandardize.LargestFragmentChooser(preferOrganic=True)
-        chosen = chooser.choose(stripped)
-    except Exception as exc:
-        return None, f"脱盐与母核选择失败: {exc}"
-
-    if chosen is None or chosen.GetNumAtoms() == 0:
+    # 2. Counter-ion / solvate stripping + genuine mixture rejection
+    chosen, reason = _select_core_fragment(mol)
+    if chosen is None:
+        return None, reason or "脱盐后无有效分子结构"
+    if chosen.GetNumAtoms() == 0:
         return None, "脱盐后无有效分子结构"
 
-    # 4. Organic element whitelist verification
+    # 3. Organic element whitelist verification
     disallowed = sorted({atom.GetSymbol() for atom in chosen.GetAtoms()} - ALLOWED_ORGANIC_ELEMENTS)
     if disallowed:
         elem_str = ", ".join(disallowed)
         return None, f"含非有机/金属元素，不适用标准分子对接力场 (含: {elem_str})"
 
-    # 5. Heavy atom range verification
+    # 4. Heavy atom range verification
     n_heavy = chosen.GetNumHeavyAtoms()
     if n_heavy < min_heavy or n_heavy > max_heavy:
         return None, f"重原子数超出范围 [{min_heavy}, {max_heavy}] (当前: {n_heavy})"
@@ -138,54 +335,169 @@ def desalt_and_filter(
     return chosen, None
 
 
-def identify_sugar_rings(mol: Chem.Mol) -> list[set[int]]:
-    """Identifies pyranose and furanose sugar rings via ring topology.
+def _ring_is_isolated(mol: Chem.Mol, ring: tuple[int, ...]) -> bool:
+    """Condition A: the ring must be an isolated monocycle (no fusion/bridge/spiro).
 
-    A valid sugar ring must:
-    - Be a 5-membered (furanose) or 6-membered (pyranose) non-aromatic saturated ring.
-    - Contain exactly one ring oxygen atom and carbon for the remainder.
-    - Bear at least 3 exocyclic heteroatom/carbon-oxygen substituents (or 2 for pentoses).
+    Any ring bond shared with another ring (fused/bridged systems) or any ring atom
+    that also belongs to another ring (spiro) disqualifies the candidate.  This alone
+    rules out flavonoid C-rings, catechin, podophyllotoxin, artemisinin, ginkgolides,
+    tetrahydrofuran lignans and other caged polycycles.
     """
-    sugar_rings: list[set[int]] = []
+    ring_info = mol.GetRingInfo()
+    n_ring_atoms = len(ring)
+    for i in range(n_ring_atoms):
+        bond = mol.GetBondBetweenAtoms(ring[i], ring[(i + 1) % n_ring_atoms])
+        if bond is None:
+            return False
+        if ring_info.NumBondRings(bond.GetIdx()) > 1:
+            return False
+    for atom_idx in ring:
+        memberships = 0
+        for candidate in ring_info.AtomRings():
+            if atom_idx in candidate:
+                memberships += 1
+                if memberships > 1:
+                    return False
+    return True
+
+
+def _count_sugar_polar_groups(mol: Chem.Mol, ring: set[int]) -> int:
+    """Condition B: free -OH / -CH2OH / -C(=O)OH(-C(=O)O-) on ring carbons."""
+    n_polar = 0
+    for atom_idx in ring:
+        atom = mol.GetAtomWithIdx(atom_idx)
+        if atom.GetSymbol() != "C":
+            continue
+        polar = False
+        for nbr in atom.GetNeighbors():
+            if nbr.GetIdx() in ring:
+                continue
+            if nbr.GetSymbol() == "O":
+                heavy_nbrs = [x for x in nbr.GetNeighbors() if x.GetAtomicNum() > 1]
+                if len(heavy_nbrs) == 1 and (
+                    nbr.GetTotalNumHs() >= 1 or nbr.GetFormalCharge() < 0
+                ):
+                    polar = True  # free hydroxyl / alkoxide
+                continue
+            if nbr.GetSymbol() != "C":
+                continue
+            substituents = [x for x in nbr.GetNeighbors() if x.GetIdx() != atom_idx]
+            if not substituents:
+                continue
+            double_oxy = []
+            hydroxyl_oxy = []
+            for sub in substituents:
+                if sub.GetSymbol() != "O":
+                    continue
+                bond = mol.GetBondBetweenAtoms(nbr.GetIdx(), sub.GetIdx())
+                if bond is not None and bond.GetBondType() == Chem.BondType.DOUBLE:
+                    double_oxy.append(sub)
+                    continue
+                heavy_sub = [x for x in sub.GetNeighbors() if x.GetAtomicNum() > 1]
+                if len(heavy_sub) == 1 and (
+                    sub.GetTotalNumHs() >= 1 or sub.GetFormalCharge() < 0
+                ):
+                    hydroxyl_oxy.append(sub)
+            if double_oxy and hydroxyl_oxy and len(substituents) <= 2:
+                polar = True  # carboxylic acid / carboxylate (uronic acid)
+            elif len(substituents) == 1 and hydroxyl_oxy:
+                polar = True  # hydroxymethyl
+        if polar:
+            n_polar += 1
+    return n_polar
+
+
+def _ring_has_anomeric_carbon(mol: Chem.Mol, ring: set[int], ring_oxygen: int) -> bool:
+    """Ring carbon bonded to the ring oxygen *and* to an exocyclic O/N (acetal C1)."""
+    for atom_idx in ring:
+        atom = mol.GetAtomWithIdx(atom_idx)
+        if atom.GetSymbol() != "C":
+            continue
+        if not any(nbr.GetIdx() == ring_oxygen for nbr in atom.GetNeighbors()):
+            continue
+        if any(
+            nbr.GetIdx() not in ring and nbr.GetSymbol() in ("O", "N")
+            for nbr in atom.GetNeighbors()
+        ):
+            return True
+    return False
+
+
+def _count_exocyclic_aryl_substituents(mol: Chem.Mol, ring: set[int]) -> int:
+    """Condition C: ring carbons directly bearing an aromatic carbon substituent."""
+    n_aryl = 0
+    for atom_idx in ring:
+        atom = mol.GetAtomWithIdx(atom_idx)
+        if atom.GetSymbol() != "C":
+            continue
+        for nbr in atom.GetNeighbors():
+            if nbr.GetIdx() in ring:
+                continue
+            if nbr.GetSymbol() == "C" and nbr.GetIsAromatic():
+                n_aryl += 1
+                break
+    return n_aryl
+
+
+def identify_sugar_rings(mol: Chem.Mol) -> list[set[int]]:
+    """Identifies pyranose and furanose sugar rings via topology + substituent pattern.
+
+    A valid sugar ring must simultaneously satisfy:
+    - be a 5-membered (furanose) or 6-membered (pyranose) saturated ring carrying
+      exactly one ring oxygen;
+    - **Condition A** be an isolated monocycle - no fused/bridged/spiro ring bond
+      (excludes flavonoid C-rings, catechin, podophyllotoxin, artemisinin,
+      ginkgolides and every caged lactone core);
+    - **Condition B** carry >= 3 free -OH/-CH2OH/-COOH groups on ring carbons, or
+      >= 2 such groups plus a genuine anomeric C1 (deoxy sugars such as rhamnose,
+      and C-glycosides with >= 3 hydroxyls);
+    - **Condition C** not bear >= 2 aromatic ring substituents (dibenzylbutyrolactone
+      / tetrahydrofuran lignan cores are never sugars).
+    """
+    if mol is None or mol.GetNumAtoms() == 0:
+        return []
+    try:
+        Chem.FastFindRings(mol)
+    except Exception as exc:  # pragma: no cover - defensive
+        log.debug("FastFindRings failed: %s", exc)
     ring_info = mol.GetRingInfo()
     atom_rings = ring_info.AtomRings()
+    if not atom_rings:
+        return []
 
+    sugar_rings: list[set[int]] = []
     for ring in atom_rings:
         if len(ring) not in (5, 6):
             continue
         atoms = [mol.GetAtomWithIdx(i) for i in ring]
         if any(a.GetIsAromatic() for a in atoms):
             continue
-        # Ring bonds must all be single bonds
+        # Ring bonds must all be single bonds (no enol/lactone/aromatic ring bonds)
         bonds = [
             mol.GetBondBetweenAtoms(ring[i], ring[(i + 1) % len(ring)])
             for i in range(len(ring))
         ]
-        if any(b.GetBondType() != Chem.BondType.SINGLE for b in bonds):
+        if any(b is None or b.GetBondType() != Chem.BondType.SINGLE for b in bonds):
             continue
         symbols = [a.GetSymbol() for a in atoms]
         if symbols.count("O") != 1 or symbols.count("C") != len(ring) - 1:
             continue
 
-        hetero_subst = 0
-        for a_idx in ring:
-            atom = mol.GetAtomWithIdx(a_idx)
-            if atom.GetSymbol() != "C":
-                continue
-            for nbr in atom.GetNeighbors():
-                if nbr.GetIdx() not in ring:
-                    if nbr.GetSymbol() in ("O", "N"):
-                        hetero_subst += 1
-                        break
-                    elif nbr.GetSymbol() == "C" and any(
-                        nn.GetSymbol() in ("O", "N") for nn in nbr.GetNeighbors()
-                    ):
-                        hetero_subst += 1
-                        break
+        # Condition A: isolated monocycle only
+        if not _ring_is_isolated(mol, ring):
+            continue
+        # Condition C: lignan core guard
+        if _count_exocyclic_aryl_substituents(mol, ring) >= 2:
+            continue
 
-        min_subst = 3 if len(ring) == 6 else 2
-        if hetero_subst >= min_subst:
-            sugar_rings.append(set(ring))
+        ring_oxygen = ring[symbols.index("O")]
+        ring_set = set(ring)
+        n_polar = _count_sugar_polar_groups(mol, ring_set)
+        has_anomeric = _ring_has_anomeric_carbon(mol, ring_set, ring_oxygen)
+        # Condition B: pyranose needs >= 3 polar groups, furanose >= 2 + anomeric C1;
+        # deoxy sugars / C-glycosides may trade the third hydroxyl for a C1 acetal.
+        if n_polar >= 3 or (n_polar >= 2 and has_anomeric):
+            sugar_rings.append(ring_set)
 
     return sugar_rings
 
@@ -412,47 +724,140 @@ def scan_pains_and_tcm_alerts(mol: Chem.Mol) -> LigandQCProfile:
     )
 
 
-def standardize_tautomer_and_charge(mol: Chem.Mol) -> Chem.Mol:
-    """Normalizes tautomers and standardizes protonation state."""
+_PAT_CARBOXYLIC_ACID = Chem.MolFromSmarts("[CX3](=O)[OX2H1]")
+
+
+def _apply_physiological_ph(mol: Chem.Mol, ph: float) -> Chem.Mol:
+    """Opt-in carboxylate deprotonation correction for a physiological pH model.
+
+    Kept deliberately minimal: only explicit carboxylic acids are deprotonated above
+    their typical pKa (~4.8), which is enough to make pH-conditional runs reproducible
+    without perturbing the neutral standard state used by default.
+    """
+    if ph < 5.5:
+        return mol
+    try:
+        editable = Chem.RWMol(mol)
+        for match in mol.GetSubstructMatches(_PAT_CARBOXYLIC_ACID):
+            oxy_idx = match[2]
+            oxygen = editable.GetAtomWithIdx(oxy_idx)
+            if oxygen.GetFormalCharge() != 0:
+                continue
+            oxygen.SetFormalCharge(-1)
+            oxygen.SetNumExplicitHs(0)
+            oxygen.SetNoImplicit(True)
+        corrected = editable.GetMol()
+        Chem.SanitizeMol(corrected)
+        return corrected
+    except Exception as exc:  # pragma: no cover - defensive
+        log.debug("physiological pH correction skipped: %s", exc)
+        return mol
+
+
+def standardize_tautomer_and_charge(
+    mol: Chem.Mol,
+    *,
+    physiological_ph: float | None = None,
+    max_tautomers: int = 50,
+    max_transforms: int = 200,
+) -> Chem.Mol:
+    """Neutralises formal charges and picks the canonical tautomer (P0-4).
+
+    1. ``rdMolStandardize.Uncharger`` removes ionisable charges while keeping
+       permanent ones (nitro groups, quaternary ammonium / berberine-type alkaloids);
+    2. ``TautomerEnumerator`` with bounded effort (``maxTautomers=50``,
+       ``maxTransforms=200``) collapses keto/enol and lactam/lactim pairs onto one
+       canonical tautomer, with sp3 stereochemistry preserved;
+    3. ``physiological_ph=None`` (default) keeps the neutral standard state so the
+       resulting InChIKey stays consistent with downstream Meeko PDBQT hydrogen
+       typing; pass e.g. ``physiological_ph=7.4`` for an explicit pH 7.4 correction.
+
+    Must be applied *before* InChIKey deduplication and *before* 3D embedding.
+    """
     if mol is None:
         return mol
-    uncharger = rdMolStandardize.Uncharger()
-    uncharged = uncharger.uncharge(mol)
-    te = rdMolStandardize.TautomerEnumerator()
+    work = Chem.Mol(mol)
+    # Tautomer enumeration moves hydrogens between atoms and is only well defined for
+    # implicit-H graphs; explicit-H inputs (3D SDF/MOL) must be hydrogen-suppressed
+    # first, otherwise a migrated H can over-valence the acceptor atom.
+    explicit_hydrogens = any(atom.GetAtomicNum() == 1 for atom in work.GetAtoms())
+    if explicit_hydrogens:
+        try:
+            work = Chem.RemoveHs(work)
+        except Exception as exc:  # pragma: no cover - defensive
+            log.debug("RemoveHs failed before standardisation: %s", exc)
     try:
-        canonical = te.Canonicalize(uncharged)
-        return canonical
+        work = rdMolStandardize.Uncharger().uncharge(work)
+    except Exception as exc:
+        log.warning("charge neutralisation failed: %s", exc)
+
+    try:
+        enumerator = rdMolStandardize.TautomerEnumerator()
+        enumerator.SetMaxTautomers(int(max_tautomers))
+        enumerator.SetMaxTransforms(int(max_transforms))
+        enumerator.SetRemoveSp3Stereo(False)  # keep natural absolute configuration
+        canonical = enumerator.Canonicalize(work)
+        if canonical is not None and canonical.GetNumAtoms() > 0:
+            work = canonical
     except Exception as exc:
         log.warning("Tautomer canonicalization failed: %s", exc)
-        return uncharged
+
+    if physiological_ph is not None:
+        work = _apply_physiological_ph(work, float(physiological_ph))
+
+    if explicit_hydrogens:
+        try:
+            work = Chem.AddHs(work, addCoords=work.GetNumConformers() > 0)
+        except Exception as exc:  # pragma: no cover - defensive
+            log.debug("AddHs failed after standardisation: %s", exc)
+
+    if mol.HasProp("_Name") and not work.HasProp("_Name"):
+        try:
+            work.SetProp("_Name", mol.GetProp("_Name"))
+        except Exception:  # pragma: no cover - defensive
+            pass
+    return work
 
 
 def enumerate_stereoisomers_tcm(
     mol: Chem.Mol,
+    max_unspecified_centers: int = 3,
     max_isomers: int = 4,
-) -> tuple[list[Chem.Mol], list[str]]:
-    """Enumerates stereoisomers for unassigned chiral centers.
+) -> tuple[list[Chem.Mol], bool]:
+    """Enumerates stereoisomers for centros with unassigned configuration.
 
-    If 1-2 centers are undefined, enumerates up to max_isomers.
-    If >2 centers are undefined, avoids combinatorial explosion and returns [mol] with warning.
+    Returns ``(isomers, chiral_ok)``:
+
+    * ``chiral_ok is False`` when the molecule carries more than
+      ``max_unspecified_centers`` undefined stereocentres - the input is then
+      unusable (the returned list is ``[mol]`` unchanged) and callers must reject
+      the molecule (``library.py`` counts it as ``n_chiral_fail``);
+    * otherwise the enumerated isomers (up to ``max_isomers``) are returned, with
+      ``[mol]`` when nothing needed enumerating.
     """
-    centers = Chem.FindMolChiralCenters(mol, includeUnassigned=True)
-    unassigned = [c for c in centers if c[1] == "?"]
-    warnings: list[str] = []
-
-    if not unassigned:
-        return [mol], []
-
-    if len(unassigned) > 2:
-        warnings.append(
-            f"含 {len(unassigned)} 个未定义手性中心，已保留默认构型避免组合爆炸，建议核查天然绝对构型"
-        )
-        return [mol], warnings
-
-    opts = StereoEnumerationOptions(maxIsomers=max_isomers, onlyUnassigned=True)
+    if mol is None:
+        return [], False
     try:
-        isomers = list(EnumerateStereoisomers(mol, options=opts))
-        return (isomers if isomers else [mol]), []
+        centers = Chem.FindMolChiralCenters(
+            mol, includeUnassigned=True, useLegacyImplementation=False
+        )
+    except Exception:  # pragma: no cover - defensive
+        centers = Chem.FindMolChiralCenters(mol, includeUnassigned=True)
+    unassigned = [idx for idx, tag in centers if tag == "?"]
+    if len(unassigned) > max(0, int(max_unspecified_centers)):
+        log.info(
+            "%d undefined stereocentres (> %d) - chiral QC failed",
+            len(unassigned),
+            max_unspecified_centers,
+        )
+        return [mol], False
+    if not unassigned:
+        return [mol], True
+
+    options = StereoEnumerationOptions(maxIsomers=int(max_isomers), onlyUnassigned=True)
+    try:
+        isomers = list(EnumerateStereoisomers(mol, options=options))
     except Exception as exc:
-        warnings.append(f"手性中心枚举失败: {exc}")
-        return [mol], warnings
+        log.warning("stereoisomer enumeration failed: %s", exc)
+        return [mol], True
+    return (isomers or [mol]), True

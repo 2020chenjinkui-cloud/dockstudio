@@ -28,6 +28,10 @@ _MODEL_RE = re.compile(r"^\s*MODEL\s+(\d+)", re.IGNORECASE)
 _GNINA_STDOUT_TABLE_RE = re.compile(
     r"^\s*(\d+)\s+(-?\d+(?:\.\d+)?)\s+(-?\d+(?:\.\d+)?)\s+(-?\d+(?:\.\d+)?)"
 )
+# gnina's stdout table header varies between releases:
+#   "mode |  affinity | CNN pose score | CNN affinity"   (dock/minimize)
+#   "CNNscore: 0.98 CNNaffinity: -9.9"                   (log-style lines)
+_GNINA_TABLE_HEADER_RE = re.compile(r"CNN\s*(?:pose\s*)?score|CNN\s*affinity", re.IGNORECASE)
 
 
 def parse_gnina_out(out_path: Path, run_log: str) -> list[Pose]:
@@ -76,11 +80,12 @@ def parse_gnina_out(out_path: Path, run_log: str) -> list[Pose]:
         if current_pose is not None and current_pose.get("affinity") is not None:
             poses.append(Pose(**current_pose))
 
-    # fallback: stdout mode table (gnina 4-column or vina-style) if present
+    # fallback: stdout mode table (gnina 4-column or vina-style) if present.
+    # `--score_only` / `--minimize` runs may emit the CNN columns only in this
+    # table (header spellings differ across gnina releases), so the header
+    # detection accepts both "CNN pose score" and "CNNscore"/"CNNaffinity".
     if not poses:
-        has_gnina_table_header = bool(
-            re.search(r"CNNscore.*?CNNaffinity", run_log, re.IGNORECASE)
-        )
+        has_gnina_table_header = bool(_GNINA_TABLE_HEADER_RE.search(run_log))
         for line in run_log.splitlines():
             if has_gnina_table_header:
                 m_gnina = _GNINA_STDOUT_TABLE_RE.match(line)
@@ -193,11 +198,22 @@ class GninaEngine(VinaEngine):
         ligand_name: str,
         out_name: str,
     ) -> list[str]:
-        """gnina CLI 不含 --energy_range（vina 专有），从继承的命令里剔除。"""
+        """gnina CLI 不含 --energy_range（vina 专有），从继承的命令里剔除。
+
+        另外支持原位重打分/局部优化（Task Fix 3.3 / P1-3.3）：
+        ``DockParams.score_only`` -> ``--score_only``（坐标不变，仅 CNN/Vina 打分），
+        ``DockParams.minimize``   -> ``--minimize``（以给定构象为起点做就地局部优化）。
+        两者同为真时 ``--score_only`` 优先（严格更保守：绝不移动坐标）。
+        """
         cmd = super()._build_cmd(binary, box, params, receptor_name, ligand_name, out_name)
         if "--energy_range" in cmd:
             i = cmd.index("--energy_range")
             del cmd[i : i + 2]
+        # In-place rescoring flags: `--score_only` wins over `--minimize`.
+        if getattr(params, "score_only", False):
+            cmd.append("--score_only")
+        elif getattr(params, "minimize", False):
+            cmd.append("--minimize")
         if os.environ.get("DOCKSTUDIO_GNINA_CPU") == "1":
             cmd.append("--no_gpu")
         return cmd

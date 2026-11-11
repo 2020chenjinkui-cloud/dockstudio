@@ -265,18 +265,37 @@ def load_energy_table(energy_path: Path) -> list[dict[str, Any]]:
 
 
 def load_funnel_data(funnel_path: Path) -> dict[str, int]:
-    """Parses funnel.csv into stage counts."""
+    """Parses funnel.csv into stage counts.
+
+    Accepts the extended funnel rows emitted by
+    :meth:`ScreeningFunnelReport.to_funnel_rows` (``raw``, ``aglycone_generated``,
+    ``desalt``, ``dedup``, ``chiral_failed``, ``prep_failed``, ``tier1_filtered``,
+    ``tier2_filtered``, ``funnel_filtered``, ``dock_failed``, ``docked_success``).
+
+    Robust to a UTF-8 BOM, blank lines, quoted cells and whitespace around the
+    key/value pair; unknown stages are preserved verbatim. Parsing of the legacy
+    rows (``key,value``) is unchanged.
+    """
     counts: dict[str, int] = {}
-    with open(funnel_path, "r", encoding="utf-8", errors="replace") as f:
+    with open(funnel_path, "r", encoding="utf-8-sig", errors="replace") as f:
         reader = csv.reader(f)
         for row in reader:
-            if len(row) < 2:
+            if not row:
                 continue
-            k = row[0].strip().lower()
+            k = row[0].replace("\ufeff", "").strip().strip('"').strip("'").lower()
+            if not k or k.startswith("#") or len(row) < 2:
+                continue
+            raw_value = row[1].replace("\ufeff", "").strip().strip('"').strip("'")
+            if not raw_value:
+                continue
             try:
-                counts[k] = int(row[1].strip())
+                counts[k] = int(raw_value)
             except ValueError:
-                continue
+                # Tolerate floating-point spellings such as "10.0" / "1e1"
+                try:
+                    counts[k] = int(float(raw_value))
+                except (TypeError, ValueError):
+                    continue
     return counts
 
 
@@ -867,7 +886,20 @@ def _verify_t5(
     energy_rows: list[dict[str, Any]],
     options: dict[str, Any] | None,
 ) -> TestResult:
-    """T5: Screening Funnel Self-Consistency."""
+    """T5: Screening Funnel Self-Consistency.
+
+    New mass-conservation identity (contract §3.5 / Task Fix 5.2), aligned with
+    :meth:`ScreeningFunnelReport.is_conserved`::
+
+        expected_docked = n_raw + n_aglycone_generated
+                          - (desalt + dedup + chiral_failed + prep_failed
+                             + funnel_filtered + dock_failed)
+
+    ``aglycone_generated`` accounts for TCM dual-track derivatives added to the
+    docking pool, while ``funnel_filtered`` separates hierarchical-funnel
+    eliminations from genuine docking engine failures. Missing keys count as 0
+    so that legacy packages (pre-P1-6 funnel.csv) still verify correctly.
+    """
     if not pkg.funnel_path:
         return TestResult(
             test_id="T5",
@@ -881,15 +913,32 @@ def _verify_t5(
 
     funnel = load_funnel_data(pkg.funnel_path)
     n_raw = funnel.get("raw") or funnel.get("raw_library") or funnel.get("initial") or 0
+    # TCM dual-track: derived aglycones increase the docking pool beyond n_raw.
+    n_aglycone = funnel.get("aglycone_generated") or funnel.get("aglycone") or 0
     n_desalt = funnel.get("desalt") or 0
     n_dedup = funnel.get("dedup") or 0
     n_chiral_failed = funnel.get("chiral_failed") or 0
     n_prep_failed = funnel.get("prep_failed") or 0
+    # Hierarchical-funnel eliminations (thresholds / convergence / strain QC) are
+    # NOT docking failures; keep them in a separate accounting bucket.
+    if "funnel_filtered" in funnel:
+        n_funnel_filtered = funnel.get("funnel_filtered") or 0
+    else:
+        n_funnel_filtered = (funnel.get("tier1_filtered") or 0) + (
+            funnel.get("tier2_filtered") or 0
+        )
     n_dock_failed = funnel.get("dock_failed") or 0
     n_docked_success = funnel.get("docked_success") or funnel.get("final_scored") or 0
 
-    total_losses = n_desalt + n_dedup + n_chiral_failed + n_prep_failed + n_dock_failed
-    expected_docked = n_raw - total_losses
+    total_losses = (
+        n_desalt
+        + n_dedup
+        + n_chiral_failed
+        + n_prep_failed
+        + n_funnel_filtered
+        + n_dock_failed
+    )
+    expected_docked = n_raw + n_aglycone - total_losses
     actual_rows = len(energy_rows)
 
     disc_1 = abs(expected_docked - n_docked_success)
@@ -898,7 +947,11 @@ def _verify_t5(
 
     passed = (total_disc == 0 and n_raw > 0)
     status = "PASS" if passed else "FAIL"
-    obs = f"Raw={n_raw}, 损耗={total_losses}, 差值={total_disc}"
+    obs = (
+        f"Raw={n_raw}+苷元={n_aglycone}-损耗={total_losses}"
+        f"(漏斗淘汰={n_funnel_filtered},对接失败={n_dock_failed})"
+        f"→期望={expected_docked},成功={n_docked_success},结果行={actual_rows},差值={total_disc}"
+    )
 
     return TestResult(
         test_id="T5",

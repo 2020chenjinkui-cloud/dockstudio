@@ -31,6 +31,13 @@ class DockParams(BaseModel):
     seed: int | None = None
     scoring: str = "vina"  # must be in engine manifest scoring_functions
 
+    # --- Orthogonal rescoring / in-place refinement (GNINA --minimize / --score_only) ---
+    # When `minimize` is True the engine must locally minimize the *supplied* pose
+    # in place instead of running a fresh global search; `score_only` evaluates the
+    # supplied pose without any coordinate change.
+    minimize: bool = False
+    score_only: bool = False
+
 
 class Pose(BaseModel):
     """One docked binding mode."""
@@ -457,11 +464,13 @@ class ScreeningCandidateRow(BaseModel):
     smiles: str = ""
     affinity_mean: float = 0.0  # kcal/mol (多 seed 均值)
     affinity_std: float = 0.0  # kcal/mol (多 seed 标准差)
+    affinity_seed0: float | None = None  # kcal/mol (主种子 seed_0 单次对接值, 供 /verify T1 重算对齐)
     pose_rmsd_seed: float | None = None  # 跨种子构象自洽 RMSD (Å)
     le: float = 0.0  # Ligand Efficiency (-dG / N_heavy)
     sile: float = 0.0  # Size-Independent LE (-dG / N_heavy^0.3)
     lle: float = 0.0  # Lipophilic LE (pKd - cLogP)
     strain_energy: float = 0.0  # 配体内部构象张力能 (kcal/mol)
+    affinity_corrected: float | None = None  # ΔG_corr = ΔG_raw + 0.5*max(0, ΔE_strain-3.0)
     cnn_score: float | None = None  # GNINA CNN Pose Score (0~1)
     cnn_affinity: float | None = None  # GNINA CNN pKd
     anchor_match_ratio: float = 1.0  # 关键残基相互作用满足率 (0~1)
@@ -470,13 +479,31 @@ class ScreeningCandidateRow(BaseModel):
     ecr_rank: int = 0  # ECR 排名
     cluster_id: int = 0  # Murcko/Butina 骨架簇编号
     is_cluster_rep: bool = False  # 是否为该骨架簇代表分子
+    best_pose_path: str | None = None  # 真实最优对接构象文件绝对路径 (交付 poses/ 时使用)
     alerts: list[str] = Field(default_factory=list)  # PAINS / 中药假阳性警示标签
 
 
 class ScreeningFunnelReport(BaseModel):
-    """三级漏斗全链路损耗统计与交付报告。"""
+    """三级漏斗全链路损耗统计与交付报告。
+
+    Mass-conservation invariants (both must hold, see :attr:`is_conserved`):
+
+    1. Preparation stage:
+       ``n_raw - (n_desalt_fail + n_dedup + n_chiral_fail + n_prep_fail) == n_ready``
+    2. Docking + funnel stage:
+       ``n_ready + n_aglycone_generated - (n_dock_failed + n_funnel_filtered) == n_docked_success``
+
+    ``n_aglycone_generated`` records the extra TCM dual-track aglycone derivatives
+    added to the docking pool (they are derivatives, not new library entries, so
+    they must be disclosed explicitly instead of silently inflating the pool).
+    ``n_funnel_filtered`` records molecules eliminated by the hierarchical funnel
+    thresholds (Tier-1/Tier-2 ratio cut-offs, convergence/strain QC rejection) and
+    is deliberately kept separate from ``n_dock_failed`` (engine crashes), so that
+    "正常淘汰" and "对接程序失败" never share the same accounting bucket.
+    """
 
     n_raw: int = 0
+    n_aglycone_generated: int = 0
     n_desalt_fail: int = 0
     n_dedup: int = 0
     n_chiral_fail: int = 0
@@ -488,6 +515,9 @@ class ScreeningFunnelReport(BaseModel):
     n_tier2_out: int = 0
     n_tier3_in: int = 0
     n_tier3_out: int = 0
+    n_tier1_filtered: int = 0
+    n_tier2_filtered: int = 0
+    n_funnel_filtered: int = 0
     n_dock_failed: int = 0
     n_docked_success: int = 0
     funnel_csv_path: str | None = None
@@ -496,20 +526,34 @@ class ScreeningFunnelReport(BaseModel):
     candidates: list[ScreeningCandidateRow] = Field(default_factory=list)
 
     @property
+    def prep_losses(self) -> int:
+        return self.n_desalt_fail + self.n_dedup + self.n_chiral_fail + self.n_prep_fail
+
+    @property
+    def n_docking_pool(self) -> int:
+        """Total ligands actually submitted to docking (incl. derived aglycones)."""
+        return self.n_ready + self.n_aglycone_generated
+
+    @property
     def is_conserved(self) -> bool:
-        prep_conserved = (
-            self.n_raw - (self.n_desalt_fail + self.n_dedup + self.n_chiral_fail + self.n_prep_fail)
-            == self.n_ready
+        prep_conserved = self.n_raw - self.prep_losses == self.n_ready
+        dock_conserved = (
+            self.n_docking_pool - (self.n_dock_failed + self.n_funnel_filtered)
+            == self.n_docked_success
         )
-        return prep_conserved
+        return prep_conserved and dock_conserved
 
     def to_funnel_rows(self) -> list[tuple[str, int]]:
         return [
             ("raw", self.n_raw),
+            ("aglycone_generated", self.n_aglycone_generated),
             ("desalt", self.n_desalt_fail),
             ("dedup", self.n_dedup),
             ("chiral_failed", self.n_chiral_fail),
             ("prep_failed", self.n_prep_fail),
+            ("tier1_filtered", self.n_tier1_filtered),
+            ("tier2_filtered", self.n_tier2_filtered),
+            ("funnel_filtered", self.n_funnel_filtered),
             ("dock_failed", self.n_dock_failed),
             ("docked_success", self.n_docked_success),
         ]

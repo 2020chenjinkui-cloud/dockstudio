@@ -9,6 +9,7 @@ import shutil
 import signal
 import subprocess
 import threading
+import time
 from pathlib import Path
 
 from ..config import Settings, get_settings, resolve_vina_binary
@@ -108,8 +109,77 @@ class VinaEngine(BaseEngine):
 
     def __init__(self, settings: Settings | None = None):
         self.settings = settings or get_settings()
-        self._current: subprocess.Popen | None = None
+        # One engine instance may be shared by several worker threads
+        # (screen_runner ThreadPoolExecutor), so bookkeeping a single
+        # `_current` handle silently forgot every process but the last one
+        # (P2-2). Track *all* live subprocesses instead.
+        self._active_procs: set[subprocess.Popen] = set()
         self._lock = threading.Lock()
+
+    # ------------------------------------------------------- process table
+
+    @property
+    def _current(self) -> subprocess.Popen | None:
+        """Backwards-compatible read-only alias for "the" running process.
+
+        Existing callers/tests read `engine._current`; per contract it now
+        resolves to any *live* member of `_active_procs` (None when the engine
+        is idle), never to a stale handle.
+        """
+        with self._lock:
+            procs = list(self._active_procs)
+        for proc in procs:
+            try:
+                if proc.poll() is None:
+                    return proc
+            except (OSError, ValueError):  # pragma: no cover - defensive
+                continue
+        return None
+
+    def _register_proc(self, proc: subprocess.Popen) -> None:
+        """Track a freshly launched subprocess (thread-safe)."""
+        with self._lock:
+            self._active_procs.add(proc)
+
+    def _unregister_proc(self, proc: subprocess.Popen) -> None:
+        """Forget a finished/cancelled subprocess (idempotent, thread-safe)."""
+        with self._lock:
+            self._active_procs.discard(proc)
+
+    def _terminate_proc(self, proc: subprocess.Popen, wait_s: float = 2.0) -> None:
+        """Best-effort kill of ONE engine subprocess tree (idempotent, no raise)."""
+        if proc is None:
+            return
+        try:
+            if proc.poll() is not None:
+                return
+        except (OSError, ValueError):  # pragma: no cover - defensive
+            return
+        log.info("cancel requested, killing %s pid=%s", self.manifest.name, proc.pid)
+        try:
+            if platform.system() == "Windows":
+                subprocess.run(
+                    ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                    capture_output=True,
+                    check=False,
+                )
+            else:
+                try:
+                    os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+                except (ProcessLookupError, PermissionError):
+                    proc.kill()
+        except OSError as exc:  # pragma: no cover - platform dependent
+            log.warning("taskkill failed: %s", exc)
+        # Reap politely so poll()/returncode settle for callers (no blocking
+        # wait() here: another thread may own the child). Bounded, never raises.
+        deadline = time.monotonic() + wait_s
+        while time.monotonic() < deadline:
+            try:
+                if proc.poll() is not None:
+                    return
+            except (OSError, ValueError):  # pragma: no cover - defensive
+                return
+            time.sleep(0.02)
 
     def _binary(self) -> Path:
         if platform.system().lower() not in self.manifest.platforms:
@@ -214,33 +284,31 @@ class VinaEngine(BaseEngine):
         ]
 
     def cancel_current(self) -> None:
-        """Best-effort kill of the currently running vina process tree."""
+        """Best-effort kill of **every** in-flight subprocess of this engine.
+
+        The engine instance is shared by concurrent screen workers, so all
+        registered processes must be terminated — killing only the last one
+        (the old `_current` behaviour) orphaned the other docking runs (P2-2).
+        """
         with self._lock:
-            proc = self._current
-        if proc is None or proc.poll() is not None:
+            procs = list(self._active_procs)
+            self._active_procs.clear()
+        if not procs:
             return
-        log.info("cancel requested, killing vina pid=%s", proc.pid)
-        try:
-            if platform.system() == "Windows":
-                subprocess.run(
-                    ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
-                    capture_output=True,
-                    check=False,
-                )
-            else:
-                try:
-                    os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-                except (ProcessLookupError, PermissionError):
-                    proc.kill()
-        except OSError as exc:
-            log.warning("taskkill failed: %s", exc)
+        log.info("canceling %d active %s process(es)", len(procs), self.manifest.name)
+        for proc in procs:
+            self._terminate_proc(proc)
 
     def _wait(self, proc: subprocess.Popen) -> tuple[str, str]:
         """Wait for the subprocess with a timeout; raise DockingError on timeout."""
         try:
             stdout, stderr = proc.communicate(timeout=self.settings.job_timeout_s)
         except subprocess.TimeoutExpired as exc:
-            self.cancel_current()
+            # Kill and forget only *this* process: sibling workers sharing the
+            # engine instance must keep running, and dropping it from the table
+            # first guarantees the same pid is never killed twice.
+            self._unregister_proc(proc)
+            self._terminate_proc(proc)
             raise DockingError(
                 f"vina timed out after {self.settings.job_timeout_s}s: "
                 f"{_key_lines((exc.stderr or b'') if isinstance(exc.stderr, bytes) else (exc.stderr or ''))}"
@@ -313,14 +381,11 @@ class VinaEngine(BaseEngine):
         except OSError as exc:
             raise EngineUnavailableError(f"failed to launch vina: {exc}") from exc
 
-        with self._lock:
-            self._current = proc
+        self._register_proc(proc)
         try:
             stdout, stderr = self._wait(proc)
         finally:
-            with self._lock:
-                if self._current is proc:
-                    self._current = None
+            self._unregister_proc(proc)
 
         run_log = (stdout or "") + "\n--- stderr ---\n" + (stderr or "")
         if proc.returncode != 0:

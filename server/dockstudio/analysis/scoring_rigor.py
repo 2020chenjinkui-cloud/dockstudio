@@ -73,6 +73,43 @@ def compute_ligand_efficiencies(
 # 2. MMFF94s Conformational Strain Energy
 # ---------------------------------------------------------------------------
 
+#: Number of ETKDGv3 conformers used to locate the global minimum when the
+#: caller does not supply a trustworthy ``global_min_energy`` baseline.
+_STRAIN_EMBED_NUM_CONFS = 10
+#: Deterministic embedding seed (contract Task Fix 3.1: ``randomSeed=42``).
+_STRAIN_EMBED_RANDOM_SEED = 42
+#: Unconstrained minimisation steps for each ensemble member / local relaxation.
+_STRAIN_MINIMIZE_MAX_ITS = 500
+
+# ---- Polar-hydrogen (H-bond network) rotamer search -----------------------
+# Task Fix 3.1b: after a PDBQT round trip the pose's hydrogens are re-generated
+# with ``AddHs(addCoords=True)`` and can sit in a hydrogen-bond network that is
+# many kcal/mol above the prep baseline. Relaxing hydrogens *alone* cannot cross
+# O-H/N-H rotation barriers, which used to fake 4-26 kcal/mol of "strain" for
+# polyphenols (quercetin / rutin / baicalin / arbutin) and vetoed legitimate
+# Tier-2 poses. The docked heavy-atom geometry is authoritative, so only the
+# polar hydrogens are re-oriented, deterministically:
+_STRAIN_H_ROTAMER_STEPS = 12  # 30 deg grid around the donor-heavy/upstream axis
+_STRAIN_MAX_POLAR_H_DONORS = 10  # hard cap (rutin needs 10; see task report)
+_STRAIN_SCAN_MIN_ITS = 80  # H relaxation per rotamer candidate
+#: Total minimisation budget for one call (Task Fix 3.1c raised it from 80 to 240
+#: so the worst-case coupled H-bond networks still have head-room; the cheap path
+#: only uses ~one minimisation per donor).
+_STRAIN_MAX_MINIMIZATIONS = 240
+_STRAIN_FALLBACK_RESIDUAL = 1.5  # kcal/mol above which multi-start is attempted
+#: Coordinated all-donor rotations (lock-step patterns) for coupled networks.
+#: These are applied to *every* donor with the same offset, so the sweep is
+#: independent of donor ordering (Task Fix 3.1c).
+_STRAIN_MULTISTART_PATTERNS = 16
+#: Additional minimisations allowed for the multi-start fallback (bounded).
+_STRAIN_MAX_MULTISTART_MINIMIZATIONS = 24
+#: Tolerance (kcal/mol) used to decide whether a fully relaxed pose lands back
+#: near the caller's baseline (=> genuine strain) or nowhere near it
+#: (=> the prep baseline was evaluated in a different force-field state).
+_STRAIN_STATE_TOLERANCE = 5.0
+_POLAR_DONOR_ELEMENTS = (7, 8, 16)  # N, O, S
+
+
 def compute_internal_strain_energy_penalty(
     docked_energy: float,
     global_min_energy: float,
@@ -102,6 +139,527 @@ def compute_internal_strain_energy_penalty(
     return round(delta_e, 4), round(corr_aff, 4), is_high
 
 
+def _is_finite_number(value: Any) -> bool:
+    """True when ``value`` is a finite real number (None/NaN/inf -> False)."""
+    try:
+        return math.isfinite(float(value))
+    except (TypeError, ValueError):
+        return False
+
+
+#: Coordinate resolution used to break canonical-ranking ties (0.0001 Å).
+_CANONICAL_COORD_DECIMALS = 4
+
+
+def _canonical_atom_order(mol: Chem.Mol) -> list[int]:
+    """Total atom order derived only from the molecular graph and 3D coordinates.
+
+    ``Chem.CanonicalRankAtoms(breakTies=False)`` leaves symmetry-equivalent atoms
+    tied; the tie is broken here by the atom's own 3D position (which travels
+    with the atom through ``Chem.RenumberAtoms``). The resulting order is
+    therefore identical for every input numbering of the same conformer, which is
+    what makes the heuristic searches below atom-order independent.
+    """
+    n_atoms = mol.GetNumAtoms()
+    try:
+        ranks = list(Chem.CanonicalRankAtoms(mol, breakTies=False))
+    except Exception:
+        return list(range(n_atoms))
+    if len(ranks) != n_atoms:
+        return list(range(n_atoms))
+    try:
+        positions = np.array(mol.GetConformer().GetPositions(), dtype=float)
+    except Exception:
+        positions = np.zeros((n_atoms, 3), dtype=float)
+    quantized = np.round(positions, _CANONICAL_COORD_DECIMALS)
+    return sorted(
+        range(n_atoms),
+        key=lambda idx: (
+            int(ranks[idx]),
+            float(quantized[idx][0]),
+            float(quantized[idx][1]),
+            float(quantized[idx][2]),
+        ),
+    )
+
+
+def _canonicalize_atom_order(mol: Chem.Mol) -> Chem.Mol:
+    """Renumbers ``mol`` canonically (conformer coordinates move with the atoms)."""
+    try:
+        order = _canonical_atom_order(mol)
+        if len(order) != mol.GetNumAtoms():
+            return mol
+        renumbered = Chem.RenumberAtoms(mol, order)
+        return renumbered if renumbered is not None else mol
+    except Exception:
+        return mol
+
+
+def _sanitized_copy(mol: Chem.Mol) -> Chem.Mol | None:
+    """Full RDKit sanitisation of a copy (only used as a force-field fallback)."""
+    try:
+        work = Chem.Mol(mol)
+        work.UpdatePropertyCache(strict=False)
+        Chem.SanitizeMol(work)
+        return work
+    except Exception:
+        try:
+            work = Chem.Mol(mol)
+            work.UpdatePropertyCache(strict=False)
+            Chem.SanitizeMol(
+                work,
+                Chem.SanitizeFlags.SANITIZE_ALL ^ Chem.SanitizeFlags.SANITIZE_PROPERTIES,
+            )
+            return work
+        except Exception:
+            return None
+
+
+def _force_field_available(mol: Chem.Mol) -> bool:
+    """True when an MMFF94s (UFF fallback) force field can be built for ``mol``.
+
+    The probe runs on a *copy*: ``MMFFGetMoleculeProperties`` mutates the
+    molecule's aromaticity perception, and that must never leak into the
+    molecule whose force-field state we are trying to preserve.
+    """
+    try:
+        probe = Chem.Mol(mol)
+    except Exception:
+        return False
+    try:
+        use_mmff = bool(AllChem.MMFFHasAllMoleculeParams(probe))
+    except Exception:
+        use_mmff = False
+    return _build_force_field(probe, use_mmff) is not None
+
+
+def _prepare_mol_for_force_field(docked_mol: Chem.Mol) -> Chem.Mol | None:
+    """Returns a canonically ordered copy with explicit hydrogens and kept coords.
+
+    Two properties are essential for a *comparable* strain measurement
+    (Task Fix 3.1c):
+
+    1. **Atom-order invariance** - the molecule is renumbered canonically before
+       any search runs, so the rotamer/ensemble trajectories (and therefore the
+       energies) no longer depend on the atom ordering produced by the prep or
+       the library pipeline.
+    2. **Force-field state preservation** - a full ``Chem.SanitizeMol`` is *not*
+       run unconditionally. Sanitisation re-perceives RDKit aromaticity and can
+       flip a Kekulé ring (e.g. the chromone pyranone ring of baicalin) back to
+       "aromatic", which shifts MMFF94s energies by ~18 kcal/mol relative to the
+       prep ``min_energy_kcal`` baseline and produced the residual library-path
+       false-strain veto. The caller's bond representation is kept; sanitisation
+       is only applied as a fallback when no force field can be built otherwise.
+    """
+    try:
+        mol = Chem.Mol(docked_mol)
+    except Exception:
+        return None
+    if mol is None:
+        return None
+
+    mol = _canonicalize_atom_order(mol)
+
+    # Primary path: use the molecule exactly as delivered. Only if no force field
+    # can be built do we touch its state (property cache / ring info, then full
+    # sanitisation) - both of those can re-perceive aromaticity, so they are
+    # strictly fallbacks. NOTE: even ``Chem.FastFindRings`` can rewrite bond
+    # aromaticity on some prep molecules, so it is never applied in-place here.
+    if not _force_field_available(mol):
+        candidate = Chem.Mol(mol)
+        try:
+            candidate.UpdatePropertyCache(strict=False)
+            Chem.FastFindRings(candidate)
+        except Exception:
+            pass
+        if _force_field_available(candidate):
+            mol = candidate
+        else:
+            sanitized = _sanitized_copy(mol)
+            if sanitized is not None and _force_field_available(sanitized):
+                mol = sanitized
+
+    # ``Chem.AddHs`` re-perceives aromaticity as a side effect, so it is only
+    # called when hydrogens are actually missing (a molecule that already carries
+    # its full hydrogen set must be left untouched).
+    try:
+        has_explicit_h = any(a.GetAtomicNum() == 1 for a in mol.GetAtoms())
+        has_implicit_h = sum(a.GetNumImplicitHs() for a in mol.GetAtoms()) > 0
+    except Exception:
+        has_explicit_h = any(a.GetAtomicNum() == 1 for a in mol.GetAtoms())
+        has_implicit_h = False
+    if has_implicit_h or not has_explicit_h:
+        try:
+            mol = Chem.AddHs(mol, addCoords=True)
+        except Exception:
+            try:
+                mol = Chem.AddHs(mol)
+            except Exception:
+                pass
+    return mol
+
+
+def _build_force_field(
+    mol: Chem.Mol,
+    use_mmff: bool,
+    conf_id: int = -1,
+) -> Any | None:
+    """Builds an MMFF94s (preferred) or UFF force field for the same topology."""
+    try:
+        if use_mmff:
+            props = AllChem.MMFFGetMoleculeProperties(mol, mmffVariant="MMFF94s")
+            if props is None:
+                return None
+            return AllChem.MMFFGetMoleculeForceField(mol, props, confId=conf_id)
+        return AllChem.UFFGetMoleculeForceField(mol, confId=conf_id)
+    except Exception:
+        return None
+
+
+def _relaxed_energy(mol: Chem.Mol, use_mmff: bool, conf_id: int = -1) -> float | None:
+    """Unconstrained minimisation energy of one conformer with the shared force field."""
+    ff = _build_force_field(mol, use_mmff, conf_id=conf_id)
+    if ff is None:
+        return None
+    try:
+        ff.Minimize(maxIts=_STRAIN_MINIMIZE_MAX_ITS)
+        energy = float(ff.CalcEnergy())
+    except Exception:
+        return None
+    return energy if math.isfinite(energy) else None
+
+
+def _search_conformational_global_minimum(mol: Chem.Mol, use_mmff: bool) -> float | None:
+    """ETKDGv3 conformer ensemble search for the global relaxed minimum.
+
+    Contract (Task Fix 3.1): when no ``global_min_energy`` is supplied, relaxing
+    only the *current* pose can get trapped in a nearby local minimum and thus
+    severely underestimate the strain of e.g. a high-energy rotamer. A 10-member
+    deterministic ETKDGv3 ensemble is therefore embedded on a copy of the
+    molecule and every member is relaxed with the *same* force field; the lowest
+    energy is returned (``None`` when embedding/FF fails for all members).
+    """
+    mol_copy = Chem.Mol(mol)
+    cids: list[int] = []
+    for use_random_coords in (False, True):
+        try:
+            mol_copy.RemoveAllConformers()
+        except Exception:
+            return None
+        try:
+            params = AllChem.ETKDGv3()
+            params.randomSeed = _STRAIN_EMBED_RANDOM_SEED
+            if use_random_coords:
+                # Fallback prescribed by the contract for rigid/unusual skeletons
+                params.useRandomCoords = True
+            cids = list(
+                AllChem.EmbedMultipleConfs(
+                    mol_copy,
+                    numConfs=_STRAIN_EMBED_NUM_CONFS,
+                    params=params,
+                )
+            )
+        except Exception:
+            cids = []
+        if cids:
+            break
+
+    energies: list[float] = []
+    for cid in cids:
+        energy = _relaxed_energy(mol_copy, use_mmff, conf_id=cid)
+        if energy is not None:
+            energies.append(energy)
+    return min(energies) if energies else None
+
+
+def _polar_hydrogen_rotamers(mol: Chem.Mol) -> list[tuple[int, int, int]]:
+    """Rotatable polar hydrogens as ``(h_idx, donor_heavy_idx, upstream_heavy_idx)``.
+
+    A rotatable polar hydrogen is an explicit H bonded to O/N/S whose donor heavy
+    atom has at least one heavy neighbour (so an O-H / N-H / S-H torsion axis
+    exists). The list is ordered by hydrogen atom index, which keeps the search
+    fully deterministic.
+    """
+    rotamers: list[tuple[int, int, int]] = []
+    for atom in mol.GetAtoms():
+        if atom.GetAtomicNum() != 1:
+            continue
+        neighbours = atom.GetNeighbors()
+        if len(neighbours) != 1:
+            continue
+        donor = neighbours[0]
+        if donor.GetAtomicNum() not in _POLAR_DONOR_ELEMENTS:
+            continue
+        heavy_neighbours = sorted(
+            n.GetIdx() for n in donor.GetNeighbors() if n.GetAtomicNum() > 1
+        )
+        if not heavy_neighbours:
+            continue
+        rotamers.append((atom.GetIdx(), donor.GetIdx(), heavy_neighbours[0]))
+    return rotamers
+
+
+def _rotate_point_about_axis(
+    position: Any,
+    origin: Any,
+    axis: Any,
+    angle: float,
+) -> np.ndarray:
+    """Rodrigues rotation of ``position`` about the (origin, axis) line."""
+    vector = np.asarray(position, dtype=float) - np.asarray(origin, dtype=float)
+    direction = np.asarray(axis, dtype=float)
+    norm = float(np.linalg.norm(direction))
+    if norm < 1e-9:
+        return np.asarray(position, dtype=float)
+    direction = direction / norm
+    cos_a, sin_a = math.cos(angle), math.sin(angle)
+    rotated = (
+        vector * cos_a
+        + np.cross(direction, vector) * sin_a
+        + direction * float(np.dot(direction, vector)) * (1.0 - cos_a)
+    )
+    return np.asarray(origin, dtype=float) + rotated
+
+
+def _hydrogen_relaxation_force_field(mol: Chem.Mol, use_mmff: bool) -> Any | None:
+    """Force field with every heavy atom frozen (only hydrogens may move)."""
+    ff = _build_force_field(mol, use_mmff)
+    if ff is None:
+        return None
+    try:
+        for atom in mol.GetAtoms():
+            if atom.GetAtomicNum() > 1:
+                ff.AddFixedPoint(atom.GetIdx())
+        ff.Initialize()
+    except Exception:
+        return None
+    return ff
+
+
+def _relax_and_energy(ff: Any, max_its: int) -> float | None:
+    """Minimises ``ff`` and returns the (finite) energy, or ``None``."""
+    try:
+        ff.Minimize(maxIts=max_its)
+        energy = float(ff.CalcEnergy())
+    except Exception:
+        return None
+    return energy if math.isfinite(energy) else None
+
+
+def _optimise_docked_hydrogen_network(
+    mol: Chem.Mol,
+    use_mmff: bool,
+    baseline: float | None,
+) -> float | None:
+    """Best heavy-atom-frozen energy over polar-hydrogen rotamer states.
+
+    The docked pose's heavy-atom coordinates stay authoritative (frozen); only
+    the polar hydrogens (O-H / N-H / S-H) are re-oriented so that the pose is
+    not punished for a hydrogen-bond network that ``AddHs(addCoords=True)``
+    happened to place in an arbitrary orientation (Task Fix 3.1b).
+
+    Three deterministic stages, all sharing one force field and one topology:
+
+    1. Local relaxation of all hydrogens from the pose as given.
+    2. Coordinate descent over the polar-H rotamers: each donor hydrogen is spun
+       around its donor-heavy/upstream-heavy axis on a fixed 30 deg grid, the
+       best single-point rotamer is relaxed with all hydrogens free, and the
+       move is kept only when the relaxed energy improves.
+    3. Multi-start fallback when the residual above ``baseline`` is still large
+       (strongly coupled networks, e.g. adjacent catechol OH groups): every
+       donor is rotated by a deterministic offset pattern and relaxed, and the
+       lowest energy is kept.
+
+    Returns ``None`` when no force field can be built. No random numbers are
+    involved, so identical input always produces the identical output.
+    """
+    work = Chem.Mol(mol)
+    ff = _hydrogen_relaxation_force_field(work, use_mmff)
+    if ff is None:
+        return None
+    best_energy = _relax_and_energy(ff, _STRAIN_MINIMIZE_MAX_ITS)
+    if best_energy is None:
+        return None
+    minimizations = 1
+
+    try:
+        conf = work.GetConformer()
+        start_positions = np.array(conf.GetPositions(), dtype=float)
+    except Exception:
+        return best_energy
+    snapshot = start_positions.copy()
+
+    def _restore_snapshot() -> None:
+        for idx in range(snapshot.shape[0]):
+            conf.SetAtomPosition(idx, snapshot[idx].tolist())
+
+    donors = _polar_hydrogen_rotamers(work)[:_STRAIN_MAX_POLAR_H_DONORS]
+    if not donors:
+        return best_energy
+
+    step_angle = 2.0 * math.pi / _STRAIN_H_ROTAMER_STEPS
+
+    # ---- Stage 2: deterministic per-donor rotamer coordinate descent --------
+    for h_idx, donor_idx, axis_idx in donors:
+        if minimizations >= _STRAIN_MAX_MINIMIZATIONS:
+            break
+        origin = conf.GetAtomPosition(donor_idx)
+        axis = np.asarray(conf.GetAtomPosition(axis_idx)) - np.asarray(origin)
+        start_pos = np.asarray(conf.GetAtomPosition(h_idx))
+        best_scan_energy = None
+        best_scan_pos = start_pos
+        for step in range(1, _STRAIN_H_ROTAMER_STEPS + 1):
+            position = _rotate_point_about_axis(
+                start_pos, origin, axis, step * step_angle
+            )
+            conf.SetAtomPosition(h_idx, position.tolist())
+            try:
+                scan_energy = float(ff.CalcEnergy())
+            except Exception:
+                scan_energy = math.inf
+            if best_scan_energy is None or scan_energy < best_scan_energy:
+                best_scan_energy = scan_energy
+                best_scan_pos = position
+        conf.SetAtomPosition(h_idx, np.asarray(best_scan_pos).tolist())
+        relaxed = _relax_and_energy(ff, _STRAIN_SCAN_MIN_ITS)
+        minimizations += 1
+        if relaxed is not None and relaxed < best_energy - 1e-4:
+            best_energy = relaxed
+            snapshot = np.array(conf.GetPositions(), dtype=float)
+        else:
+            _restore_snapshot()
+
+    # ---- Stage 3: coordinated multi-start for coupled H-bond networks -------
+    residual = best_energy - baseline if _is_finite_number(baseline) else None
+    if residual is not None and residual > _STRAIN_FALLBACK_RESIDUAL:
+        multistart_budget = min(
+            _STRAIN_MAX_MULTISTART_MINIMIZATIONS,
+            max(1, _STRAIN_MAX_MINIMIZATIONS - minimizations),
+        )
+        minimizations_used = 0
+        lock_step_energies: list[float] = []
+
+        def _reset_to_start() -> None:
+            for idx in range(start_positions.shape[0]):
+                conf.SetAtomPosition(idx, start_positions[idx].tolist())
+
+        def _rotate_donors(offset_for_donor: Any) -> None:
+            for donor_pos, (h_idx, donor_idx, axis_idx) in enumerate(donors):
+                origin = conf.GetAtomPosition(donor_idx)
+                axis = np.asarray(conf.GetAtomPosition(axis_idx)) - np.asarray(origin)
+                start_pos = np.asarray(conf.GetAtomPosition(h_idx))
+                offset = offset_for_donor(donor_pos)
+                position = _rotate_point_about_axis(start_pos, origin, axis, offset)
+                conf.SetAtomPosition(h_idx, position.tolist())
+
+        def _try_state() -> float | None:
+            nonlocal best_energy, snapshot
+            energy = _relax_and_energy(ff, _STRAIN_MINIMIZE_MAX_ITS)
+            if energy is not None and energy < best_energy - 1e-4:
+                best_energy = energy
+                snapshot = np.array(conf.GetPositions(), dtype=float)
+            return energy
+
+        # Sweep A - lock-step patterns: every donor is rotated by the *same*
+        # offset, so the sweep is completely independent of the donor ordering.
+        for pattern in range(1, _STRAIN_MULTISTART_PATTERNS):
+            if minimizations_used >= multistart_budget:
+                break
+            _reset_to_start()
+            offset = pattern * (2.0 * math.pi / _STRAIN_MULTISTART_PATTERNS)
+            _rotate_donors(lambda _donor_pos, _offset=offset: _offset)
+            energy = _try_state()
+            minimizations += 1
+            minimizations_used += 1
+            if energy is not None:
+                lock_step_energies.append(energy)
+
+        # Convergence criterion (Task Fix 3.1c): if the two best lock-step states
+        # still differ by more than the fallback threshold, the coupled network is
+        # not resolved - add an independent staggered sweep.
+        if len(lock_step_energies) >= 2:
+            ordered = sorted(lock_step_energies)
+            lock_step_gap = ordered[1] - ordered[0]
+        else:
+            lock_step_gap = math.inf if len(lock_step_energies) < 2 else 0.0
+        if lock_step_gap > _STRAIN_FALLBACK_RESIDUAL:
+            for pattern in range(1, _STRAIN_MULTISTART_PATTERNS):
+                if minimizations_used >= multistart_budget:
+                    break
+                _reset_to_start()
+
+                def _staggered(donor_pos: int, _pattern: int = pattern) -> float:
+                    step_index = (_pattern * (donor_pos + 1) * 5) % _STRAIN_H_ROTAMER_STEPS
+                    return step_index * step_angle
+
+                _rotate_donors(_staggered)
+                _try_state()
+                minimizations += 1
+                minimizations_used += 1
+
+    return best_energy
+
+
+def _ring_synchronised_copy(mol: Chem.Mol) -> Chem.Mol | None:
+    """Copy whose property cache and ring info are (re)synchronised.
+
+    ``Chem.FastFindRings`` may rewrite bond aromaticity flags on molecules whose
+    ring bookkeeping came from a different pipeline. This copy is used only as a
+    force-field-state fallback (see :func:`_state_consistent_docked_energy`).
+    """
+    try:
+        work = Chem.Mol(mol)
+        work.UpdatePropertyCache(strict=False)
+        Chem.FastFindRings(work)
+        return work
+    except Exception:
+        return None
+
+
+def _state_consistent_docked_energy(
+    mol: Chem.Mol,
+    use_mmff: bool,
+    baseline: float | None,
+) -> float | None:
+    """Heavy-atom-frozen energy that is comparable to the caller's baseline.
+
+    The prep ``min_energy_kcal`` baseline is produced by the ligand preparation
+    pipeline, whose repeated ``AddHs`` / ETKDG / MMFF calls progressively rewrite
+    the aromaticity bookkeeping of the molecule (RDKit kekulises the chromone
+    pyranone ring on the way). A pose restored from that ligand's PDBQT is
+    usually in a *different* bookkeeping state, which shifts MMFF94s energies by
+    ~18 kcal/mol even at identical heavy-atom coordinates (Task Fix 3.1c).
+
+    The delivered state is always evaluated first. Only when the residual above
+    the baseline is suspiciously large *and* fully relaxing the pose does not
+    land back near the baseline (the signature of a state mismatch rather than
+    real strain) is the molecule re-evaluated in a ring-synchronised state; the
+    lower of the two energies is kept so a genuine mismatch cannot fake strain.
+    """
+    best = _optimise_docked_hydrogen_network(mol, use_mmff, baseline)
+    if best is None:
+        return None
+    if not _is_finite_number(baseline):
+        return best
+    if best - baseline <= _STRAIN_FALLBACK_RESIDUAL:
+        return best
+
+    # Distinguish genuine strain from a force-field state mismatch: relaxing the
+    # pose back to its own minimum in the same state must land near the baseline
+    # when the state is consistent with the prep baseline.
+    relaxed = _relaxed_energy(Chem.Mol(mol), use_mmff)
+    if relaxed is not None and abs(relaxed - baseline) <= _STRAIN_STATE_TOLERANCE:
+        return best
+
+    alternative = _ring_synchronised_copy(mol)
+    if alternative is None:
+        return best
+    alternative_energy = _optimise_docked_hydrogen_network(alternative, use_mmff, baseline)
+    if alternative_energy is not None and alternative_energy < best - 1e-4:
+        return alternative_energy
+    return best
+
+
 def compute_internal_strain_energy(
     docked_mol: Chem.Mol,
     global_min_energy: float | None = None,
@@ -112,14 +670,32 @@ def compute_internal_strain_energy(
 ) -> tuple[float, float, bool]:
     """Calculates internal conformational strain energy ΔE_strain and corrected affinity for a 3D Mol.
 
-    Freezes all heavy atoms in their docked 3D coordinates, relaxes hydrogens with
-    MMFF94s (fallback to UFF), and computes strain relative to the global/local
-    relaxed minimum.
+    Freezes all heavy atoms in their docked 3D coordinates, optimises the
+    **polar-hydrogen (H-bond) network** deterministically, evaluates MMFF94s
+    (UFF fallback) and computes strain relative to the relaxed conformational
+    minimum evaluated with the very same force field.
+
+    Both ``e_docked`` and ``global_min_energy`` are therefore guaranteed to share
+    one force field (MMFF94s preferred, UFF fallback) and one atom topology
+    (canonically ordered molecule with explicit hydrogens; the caller's bond /
+    aromaticity representation is preserved so the prep baseline stays comparable
+    - see :func:`_prepare_mol_for_force_field`):
+
+    * ``e_docked``: energy of the docked pose with the heavy atoms frozen and the
+      polar-hydrogen rotamers optimised (see
+      :func:`_optimise_docked_hydrogen_network`). This removes the spurious
+      4-26 kcal/mol "strain" that a PDBQT round trip used to inject into
+      polyphenols by re-generating hydrogens outside their H-bond network
+      (Task Fix 3.1b) while genuine heavy-atom torsional strain is preserved.
+    * ``global_min_energy``: caller-supplied baseline when finite; otherwise the
+      minimum of (a) the fully relaxed *current* conformer and (b) the lowest
+      member of a deterministic 10-conformer ETKDGv3 ensemble relaxed with the
+      same force field. This prevents the classic local-minimum underestimation.
 
     Args:
         docked_mol: RDKit Mol with 3D conformer coordinates.
-        global_min_energy: Baseline global minimum energy in kcal/mol. If None,
-            computed via unconstrained force field relaxation.
+        global_min_energy: Baseline global minimum energy in kcal/mol. If None
+            (or NaN/non-finite), searched via conformer ensemble relaxation.
         affinity: Raw docking binding free energy ΔG in kcal/mol.
         high_strain_threshold: Cutoff for marking artifact poses (default 8.0 kcal/mol).
         force_constant: Restraint force constant (kept for API compatibility).
@@ -132,44 +708,50 @@ def compute_internal_strain_energy(
     if docked_mol is None or docked_mol.GetNumConformers() == 0:
         return 0.0, raw_affinity, False
 
-    mol = Chem.Mol(docked_mol)
-    has_hs = any(a.GetAtomicNum() == 1 for a in mol.GetAtoms())
-    if not has_hs:
-        mol = Chem.AddHs(mol, addCoords=True)
-
-    has_mmff = AllChem.MMFFHasAllMoleculeParams(mol)
-    if has_mmff:
-        props = AllChem.MMFFGetMoleculeProperties(mol, mmffVariant="MMFF94s")
-        ff = AllChem.MMFFGetMoleculeForceField(mol, props)
-    else:
-        props = None
-        ff = AllChem.UFFGetMoleculeForceField(mol)
-
-    if ff is None:
+    mol = _prepare_mol_for_force_field(docked_mol)
+    if mol is None or mol.GetNumConformers() == 0:
         return 0.0, raw_affinity, False
 
-    # Freeze heavy atoms so only hydrogens relax
-    for a in mol.GetAtoms():
-        if a.GetAtomicNum() > 1:
-            ff.AddFixedPoint(a.GetIdx())
-    ff.Minimize(maxIts=200)
-    e_docked = ff.CalcEnergy()
+    # Re-evaluate MMFF availability *after* hydrogen completion: the hydrogen
+    # topology changes atom typing, so a pre-hydrogen decision is not reliable.
+    # Both probes run on copies - MMFF property construction mutates the
+    # molecule's aromaticity bookkeeping and must not disturb the pose state.
+    use_mmff = bool(AllChem.MMFFHasAllMoleculeParams(Chem.Mol(mol)))
+    if not _force_field_available(mol):
+        return 0.0, raw_affinity, False
 
-    # Determine baseline relaxed energy
-    if global_min_energy is None or math.isnan(global_min_energy):
-        if has_mmff and props is not None:
-            ff_free = AllChem.MMFFGetMoleculeForceField(mol, props)
-        else:
-            ff_free = AllChem.UFFGetMoleculeForceField(mol)
-        if ff_free is not None:
-            ff_free.Minimize(maxIts=500)
-            global_min_energy = ff_free.CalcEnergy()
-        else:
-            global_min_energy = e_docked
+    baseline: float
+    if not _is_finite_number(global_min_energy):
+        # No trustworthy baseline: search the conformational space instead of
+        # only locally relaxing the current pose (which traps local minima).
+        # NOTE: work on copies - the docked conformer must stay untouched.
+        candidates: list[float] = []
+        local_relaxed = _relaxed_energy(Chem.Mol(mol), use_mmff)
+        if local_relaxed is not None:
+            candidates.append(local_relaxed)
+        ensemble_min = _search_conformational_global_minimum(mol, use_mmff)
+        if ensemble_min is not None:
+            candidates.append(ensemble_min)
+        baseline = min(candidates) if candidates else math.nan
+    else:
+        baseline = float(global_min_energy)
+
+    e_docked = _state_consistent_docked_energy(mol, use_mmff, baseline)
+    if e_docked is None or not math.isfinite(e_docked):
+        return 0.0, raw_affinity, False
+
+    if not math.isfinite(baseline):
+        baseline = e_docked
+    # Cross-baseline guard: a baseline above the docked single-point energy
+    # cannot come from the same force field/topology (e.g. the caller mixed
+    # an MMFF baseline with a UFF pose). Clamping keeps ΔE >= 0 and makes
+    # the max(0, ...) semantics explicit.
+    if baseline > e_docked:
+        baseline = e_docked
 
     return compute_internal_strain_energy_penalty(
         docked_energy=e_docked,
-        global_min_energy=global_min_energy,
+        global_min_energy=baseline,
         raw_affinity=raw_affinity,
         high_strain_threshold=high_strain_threshold,
     )

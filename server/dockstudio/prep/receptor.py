@@ -15,7 +15,9 @@ from collections import defaultdict
 from collections.abc import Iterable
 from pathlib import Path
 
-from openbabel import openbabel as ob
+from rdkit import Chem as _Chem  # noqa: F401
+from rdkit.Chem.MolStandardize import rdMolStandardize as _rdMolStandardize  # noqa: F401
+from openbabel import openbabel as ob  # isort: skip  # noqa: I001 - must load after rdkit on Linux
 
 from ..logging import get_logger
 from ..models import CocrystalLigand, PreparationError, PreparedReceptor

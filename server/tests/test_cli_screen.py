@@ -588,7 +588,16 @@ class TestRichTableRendering:
         mock_engine_setup: MockFunnelEngine,
         tmp_path: Path,
     ):
-        """Verifies that Quercetin triggers Catechol badge and clean molecules show Clean."""
+        """Verifies that Quercetin triggers Catechol badge and every row renders a verdict badge.
+
+        A candidate without PAINS/TCM alerts renders the green "Clean" badge.  Since
+        Task Fix 2.2 / P1-5 the leaderboard badge column is no longer hard-coded: a real
+        ``check_pose()`` runs on the delivered pose and, when PoseBusters is importable,
+        its protein–ligand rules are evaluated against ``protein_pdb``.  This test uses a
+        4-atom stub receptor, which those rules legitimately reject, so an otherwise clean
+        molecule may show a ``POSECHECK_*`` diagnostic badge instead of "Clean".  Both are
+        valid per-candidate verdicts; a *missing* badge is the regression we guard against.
+        """
         pdb_path, _ = mock_receptor
         out_dir = tmp_path / "out_badges"
 
@@ -606,7 +615,10 @@ class TestRichTableRendering:
         out = result.output
 
         assert "Catechol" in out
-        assert "Clean" in out or "●" in out
+        assert "Clean" in out or "●" in out or "PoseQC" in out, (
+            "leaderboard must render a per-candidate verdict badge "
+            "(Clean / ● / PoseQC diagnostic)"
+        )
 
     def test_anti_formula_injection_defense(
         self,
@@ -676,20 +688,34 @@ class TestEndToEndAcceptanceWithVerify:
         assert (out_dir / "screening_results.csv").is_file(), "screening_results.csv missing for D3"
         assert (out_dir / "poses").is_dir(), "poses directory missing for D7"
 
-        # 3. Validate funnel.csv mass conservation closure
+        # 3. Validate funnel.csv mass conservation closure (new P1-6 semantics:
+        #    TCM-derived aglycones add to the docking pool, hierarchical-funnel
+        #    eliminations are their own bucket instead of being dumped into
+        #    dock_failed):
+        #    n_raw + n_aglycone_generated
+        #      - (desalt + dedup + chiral_failed + prep_failed
+        #         + funnel_filtered + dock_failed) == n_docked_success
         funnel_counts = load_funnel_data(out_dir / "funnel.csv")
         energy_rows = load_energy_table(out_dir / "screening_results.csv")
 
         n_raw = funnel_counts.get("raw", 0)
+        n_aglycone = funnel_counts.get("aglycone_generated", 0)
+        if "funnel_filtered" in funnel_counts:
+            n_funnel_filtered = funnel_counts.get("funnel_filtered", 0)
+        else:
+            n_funnel_filtered = funnel_counts.get("tier1_filtered", 0) + funnel_counts.get(
+                "tier2_filtered", 0
+            )
         losses = (
             funnel_counts.get("desalt", 0)
             + funnel_counts.get("dedup", 0)
             + funnel_counts.get("chiral_failed", 0)
             + funnel_counts.get("prep_failed", 0)
+            + n_funnel_filtered
             + funnel_counts.get("dock_failed", 0)
         )
         docked_success = funnel_counts.get("docked_success", 0)
-        assert n_raw - losses == docked_success
+        assert n_raw + n_aglycone - losses == docked_success
         assert docked_success == len(energy_rows)
 
         # 4. Invoke run_verify on the output package
