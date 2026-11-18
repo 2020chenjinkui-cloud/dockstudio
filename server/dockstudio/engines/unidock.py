@@ -276,7 +276,9 @@ class UniDockEngine(VinaEngine):
             valid_items.append((lig_id, staged_path))
 
         if not valid_items:
-            log.warning("UniDock batch: no valid ligand files found in batch of %d", len(normalized))
+            log.warning(
+                "UniDock batch: no valid ligand files found in batch of %d", len(normalized)
+            )
             return {}
 
         # 6. Write --ligand_index file

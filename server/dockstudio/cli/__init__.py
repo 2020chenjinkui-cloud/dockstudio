@@ -137,14 +137,18 @@ def _build_parser() -> argparse.ArgumentParser:
     serve_p.add_argument("--reload", action="store_true", help="启用代码热重载 (开发模式)")
 
     # 2. engines
-    sub.add_parser("engines", help="探查硬件算力与计算引擎可用性 (CPU/GPU, Vina, Uni-Dock, GNINA 等)")
+    sub.add_parser(
+        "engines", help="探查硬件算力与计算引擎可用性 (CPU/GPU, Vina, Uni-Dock, GNINA 等)"
+    )
 
     # 3. demo
     sub.add_parser("demo", help="在内置 1HSG 蛋白酶上执行全流程端到端演示对接")
 
     # 4. prep
     prep_p = sub.add_parser("prep", help="受体 / 配体预处理向导")
-    prep_p.add_argument("target", nargs="?", choices=["receptor", "ligand"], help="准备目标 (receptor 或 ligand)")
+    prep_p.add_argument(
+        "target", nargs="?", choices=["receptor", "ligand"], help="准备目标 (receptor 或 ligand)"
+    )
     prep_p.add_argument("-i", "--input", help="输入文件路径 (PDB 或 SDF/SMILES)")
 
     # 5. dock
@@ -167,13 +171,18 @@ def _build_parser() -> argparse.ArgumentParser:
     verify_p = sub.add_parser("verify", help="运行 T1~T5 自动化交付物数值验收套件")
     verify_p.add_argument("path", help="待核算交付包路径 (目录或 .zip 压缩包)")
     verify_p.add_argument(
-        "--recalculate", "-r", action="store_true", help="调用本地 Vina 引擎执行 T1/T2 真实重对接验算"
+        "--recalculate",
+        "-r",
+        action="store_true",
+        help="调用本地 Vina 引擎执行 T1/T2 真实重对接验算",
     )
 
     # 8. audit
     audit_p = sub.add_parser("audit", help="查看不可篡改事件链与 SHA256 完整性指纹")
     audit_p.add_argument("job_id_or_path", help="任务 ID (8位十六进制) 或项目/工作目录路径")
-    audit_p.add_argument("--markdown", action="store_true", help="以原始 Markdown 格式输出 (向后兼容模式)")
+    audit_p.add_argument(
+        "--markdown", action="store_true", help="以原始 Markdown 格式输出 (向后兼容模式)"
+    )
 
     # 9. view
     view_p = sub.add_parser("view", help="启动即用即焚内网 Web 3D 快速预览 / 终端 ASCII 查看")
@@ -215,11 +224,13 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.command == "serve":
         from ..api.app import main as serve
+
         serve()
         return 0
 
     if args.command == "engines":
         from .commands.engines import run_engines_command
+
         return run_engines_command()
 
     if args.command == "demo":
@@ -227,6 +238,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.command == "prep":
         from .commands.prep import run_prep_ligand_interactive, run_prep_receptor_interactive
+
         target = (args.target or "").lower()
         if target == "receptor":
             in_p = Path(args.input) if args.input else None
@@ -236,10 +248,14 @@ def main(argv: Sequence[str] | None = None) -> int:
             run_prep_ligand_interactive()
             return 0
         from .ui import select_one
-        choice = select_one("选择准备目标:", [
-            ("受体蛋白准备 (Receptor Prep)", "清洗、加氢、指派电荷、转 PDBQT"),
-            ("小分子配体准备 (Ligand Prep)", "SMILES/SDF 质子化、低能 3D 构象生成"),
-        ])
+
+        choice = select_one(
+            "选择准备目标:",
+            [
+                ("受体蛋白准备 (Receptor Prep)", "清洗、加氢、指派电荷、转 PDBQT"),
+                ("小分子配体准备 (Ligand Prep)", "SMILES/SDF 质子化、低能 3D 构象生成"),
+            ],
+        )
         if choice == 0:
             run_prep_receptor_interactive()
         else:
@@ -248,16 +264,19 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.command == "dock":
         from .commands.dock import run_dock_interactive
+
         return run_dock_interactive(demo=args.demo)
 
     if args.command == "screen":
         # Only reached for bare `dockstudio screen` / `dockstudio screen --demo|-d`:
         # every richer argument vector was already delegated to click's `screen_cli` above.
         from .commands.screen import run_screen_interactive
+
         return run_screen_interactive(demo=args.demo)
 
     if args.command == "verify":
         from .commands.verify import run_verify
+
         target_path = Path(args.path).expanduser().resolve()
         opts = {"recalculate": True} if getattr(args, "recalculate", False) else None
         return run_verify(target_path, options=opts)
@@ -266,10 +285,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.markdown:
             return _cmd_audit(args.job_id_or_path)
         from .commands.audit import run_audit
+
         return run_audit(args.job_id_or_path)
 
     if args.command == "view":
         from .commands.view import run_view
+
         target_path = Path(args.path).expanduser().resolve()
         return run_view(target_path, port=args.port, ascii_mode=args.ascii)
 

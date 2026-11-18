@@ -42,6 +42,6 @@ def heavy_atom_rmsd(crystal_sdf: Path, pose_sdf: Path) -> float | None:
     try:
         rmsd = rdMolAlign.GetBestRMS(probe, ref)
         return round(float(rmsd), 3)
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:  # 降级兜底
         log.warning("RMSD alignment failed: %s", exc)
         return None

@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+from typing import Any
 
 from rich.table import Table
 
@@ -29,17 +30,18 @@ def detect_gpu_info() -> str | None:
                 if len(parts) >= 2:
                     return f"{parts[0]} ({int(parts[1]) // 1024}GB VRAM)"
                 return parts[0]
-        except Exception:  # noqa: BLE001
+        except Exception:  # 降级兜底
             pass
 
     # 2. Try torch if available
     try:
         import torch
+
         if torch.cuda.is_available():
             name = torch.cuda.get_device_name(0)
             mem = torch.cuda.get_device_properties(0).total_memory // (1024**3)
             return f"{name} ({mem}GB VRAM)"
-    except Exception:  # noqa: BLE001
+    except Exception:  # 降级兜底
         pass
 
     return None
@@ -66,7 +68,9 @@ def build_engines_pane() -> Any:
     engines = available_engines()
     for eng in engines:
         ok, reason = eng.is_available()
-        is_gpu = getattr(eng.manifest, "requires_gpu", False) or "unidock" in eng.manifest.name.lower()
+        is_gpu = (
+            getattr(eng.manifest, "requires_gpu", False) or "unidock" in eng.manifest.name.lower()
+        )
         status_str = format_status_badge(ok, is_gpu=is_gpu, reason=reason)
         scoring = ", ".join(eng.manifest.scoring_functions)
 
@@ -95,6 +99,7 @@ def build_engines_pane() -> Any:
     # Check boltz AI rescore capability
     try:
         from ...analysis.ai_rescore import get_availability as get_boltz_availability
+
         boltz_info = get_boltz_availability()
         boltz_ok = boltz_info.available
         boltz_reason = boltz_info.reason or ""

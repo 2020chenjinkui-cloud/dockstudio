@@ -4,9 +4,13 @@ from __future__ import annotations
 
 from pathlib import Path
 
+# 导入顺序是刻意的：Linux 上 openbabel 的插件/符号解析与 rdkit 存在加载顺序约束，
+# 必须 rdkit 先加载；isort 若重排会破坏该约束，故用 isort: off 固定本段顺序。
+# isort: off
 from rdkit import Chem
 from rdkit.Chem.MolStandardize import rdMolStandardize as _rdMolStandardize  # noqa: F401
-from openbabel import pybel  # isort: skip  # noqa: I001 - must load after rdkit on Linux
+from openbabel import pybel
+# isort: on
 
 from ..logging import get_logger
 from ..models import DockingError

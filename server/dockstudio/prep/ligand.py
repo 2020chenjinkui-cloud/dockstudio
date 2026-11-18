@@ -51,15 +51,16 @@ def _relax_existing_3d(mol: Chem.Mol, max_its: int = 500) -> tuple[Chem.Mol, flo
     return work, float(force_field.CalcEnergy())
 
 
-def _prepare_core_mol(raw_mol: Chem.Mol, min_heavy: int, max_heavy: int, source_label: str) -> Chem.Mol:
+def _prepare_core_mol(
+    raw_mol: Chem.Mol, min_heavy: int, max_heavy: int, source_label: str
+) -> Chem.Mol:
     """Desalt + tautomer/charge standardisation shared by the SMILES and file paths."""
     clean_mol, fail_reason = desalt_and_filter(raw_mol, min_heavy=min_heavy, max_heavy=max_heavy)
     if clean_mol is None:
         if fail_reason == "multi_component_mixture":
             n_components = len(Chem.GetMolFrags(raw_mol, asMols=True)) if raw_mol is not None else 0
             raise PreparationError(
-                f"检测到多个独立组分混合物（{n_components} 个不同组分），"
-                "请先拆分为单分子后再准备。"
+                f"检测到多个独立组分混合物（{n_components} 个不同组分），请先拆分为单分子后再准备。"
             )
         raise PreparationError(fail_reason or f"配体脱盐与元素/尺寸过滤失败{source_label}")
     try:

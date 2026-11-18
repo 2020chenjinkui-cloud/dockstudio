@@ -84,7 +84,9 @@ def prompt_path(
     while True:
         try:
             val = prompt(
-                HTML(f"<ansibrightblack>[</ansibrightblack><ansiyellow>📁</ansiyellow><ansibrightblack>]</ansibrightblack> <ansicyan>{message}:</ansicyan> "),
+                HTML(
+                    f"<ansibrightblack>[</ansibrightblack><ansiyellow>📁</ansiyellow><ansibrightblack>]</ansibrightblack> <ansicyan>{message}:</ansicyan> "
+                ),
                 default=default,
                 completer=completer,
             ).strip()
@@ -110,9 +112,15 @@ def confirm(message: str, default: bool = True) -> bool:
     """Prompt user for Y/n confirmation."""
     suffix = "[Y/n]" if default else "[y/N]"
     try:
-        ans = prompt(
-            HTML(f"<ansiyellow>?</ansiyellow> <b>{message}</b> <ansibrightblack>{suffix}:</ansibrightblack> ")
-        ).strip().lower()
+        ans = (
+            prompt(
+                HTML(
+                    f"<ansiyellow>?</ansiyellow> <b>{message}</b> <ansibrightblack>{suffix}:</ansibrightblack> "
+                )
+            )
+            .strip()
+            .lower()
+        )
     except (KeyboardInterrupt, EOFError):
         console.print("\n[dim]操作已取消[/dim]")
         raise
@@ -204,7 +212,9 @@ def select_one(
                         raise KeyboardInterrupt
 
             chosen_label = options[current_idx][0]
-            console.print(f"[bold #4EBA65]✓[/bold #4EBA65] {title} [bold #FFFFFF]{chosen_label}[/bold #FFFFFF]")
+            console.print(
+                f"[bold #4EBA65]✓[/bold #4EBA65] {title} [bold #FFFFFF]{chosen_label}[/bold #FFFFFF]"
+            )
             return current_idx
         except (KeyboardInterrupt, EOFError):
             console.print("\n[dim]操作已取消[/dim]")
@@ -229,7 +239,9 @@ def select_one(
     while True:
         try:
             choice_str = prompt(
-                HTML(f"<ansibrightblack>请选择 [1-{len(options)}] (回车默认={default + 1}):</ansibrightblack> ")
+                HTML(
+                    f"<ansibrightblack>请选择 [1-{len(options)}] (回车默认={default + 1}):</ansibrightblack> "
+                )
             ).strip()
         except (KeyboardInterrupt, EOFError):
             console.print("\n[dim]操作已取消[/dim]")

@@ -37,7 +37,7 @@ def _load_pose(pose_sdf: Path) -> Chem.Mol:
 def _posebusters_available() -> bool:
     try:
         import posebusters  # noqa: F401
-    except Exception:  # noqa: BLE001  # ImportError, or OSError on non-ASCII rdkit paths
+    except Exception:  # 降级兜底  # ImportError, or OSError on non-ASCII rdkit paths
         return False
     return True
 
@@ -218,7 +218,7 @@ def check_pose(
     if use_posebusters and _posebusters_available():
         try:
             return _run_posebusters(pose_sdf, idx, protein_pdb=protein_pdb)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:  # 降级兜底
             log.warning("PoseBusters failed, falling back to builtin: %s", exc)
     mol = _load_pose(pose_sdf)
     issues = _check_clashes(mol) + _check_bond_lengths(mol) + _check_out_of_box(mol, box)

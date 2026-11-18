@@ -9,9 +9,13 @@ import platform
 import sys
 from pathlib import Path
 
+# 导入顺序是刻意的：Linux 上 openbabel 的插件/符号解析与 rdkit 存在加载顺序约束，
+# 必须 rdkit 先加载；isort 若重排会破坏该约束，故用 isort: off 固定本段顺序。
+# isort: off
 from rdkit import Chem
 from rdkit.Chem.MolStandardize import rdMolStandardize as _rdMolStandardize  # noqa: F401
-from openbabel import pybel  # isort: skip  # noqa: I001 - must load after rdkit on Linux
+from openbabel import pybel
+# isort: on
 
 from ..logging import get_logger
 from ..models import Box, Interaction, PoseAnalysis
@@ -241,7 +245,7 @@ def _run_builtin(protein_pdb: Path, pose_sdf: Path) -> list[Interaction]:
     # branch below depends on; keep going with the unsanitized mol if it fails.
     try:
         Chem.SanitizeMol(pose)
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:  # 降级兜底
         log.warning("could not sanitize pose for builtin analysis: %s", exc)
     protein = _parse_protein_atoms(protein_pdb)
     conf = pose.GetConformer()
@@ -380,7 +384,7 @@ def analyze_pose(
     pose_check = None
     try:
         pose_check = check_pose(pose_sdf, box=box, pose_index=pose_idx, protein_pdb=protein_pdb)
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:  # 降级兜底
         log.warning("pose check failed (non-fatal): %s", exc)
         warnings.append(f"姿态质检失败（不影响分析）: {exc}")
     if pose_check is not None and pose_check.source == "builtin":
@@ -395,7 +399,7 @@ def analyze_pose(
                 pose_check=pose_check,
                 warnings=warnings,
             )
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:  # 降级兜底
             log.warning("PLIP failed, falling back to builtin: %s", exc)
             warnings.append(f"PLIP 失败，使用内置几何检测: {exc}")
     interactions = _run_builtin(protein_pdb, pose_sdf)

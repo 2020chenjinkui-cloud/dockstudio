@@ -34,27 +34,29 @@ ICON_RUNNING = "[bold #93A5FF]●[/bold #93A5FF]"
 ICON_UNAVAILABLE = "[#505050]○[/#505050]"
 ICON_BULLET = "[#D77757]❯[/#D77757]"
 
-DOCKSTUDIO_THEME = Theme({
-    # Brand & Panels
-    "brand": Style(color=COLOR_CLAUDE, bold=True),
-    "panel.border": Style(color=COLOR_BORDER),
-    "panel.title": Style(color=COLOR_CLAUDE, bold=True),
-    "panel.subtitle": Style(color=COLOR_INACTIVE),
-    "spinner": Style(color=COLOR_SPINNER, bold=True),
-    "prompt.border": Style(color=COLOR_BORDER),
-    # State Semantics
-    "success": Style(color=COLOR_SUCCESS, bold=True),
-    "warning": Style(color=COLOR_WARNING, bold=True),
-    "error": Style(color=COLOR_ERROR, bold=True),
-    "muted": Style(color=COLOR_INACTIVE),
-    "dim": Style(color=COLOR_SUBTLE),
-    "highlight": Style(color=COLOR_PERMISSION, bold=True),
-    "plan": Style(color=COLOR_PLAN_MODE, bold=True),
-    # Scientific & Affinity scoring
-    "energy.excellent": Style(color=COLOR_SUCCESS, bold=True),  # < -9.0 kcal/mol
-    "energy.moderate": Style(color=COLOR_WARNING, bold=True),  # -7.0 ~ -9.0 kcal/mol
-    "energy.poor": Style(color=COLOR_ERROR),  # > -7.0 kcal/mol
-    # Hardware badges
-    "badge.gpu": Style(color="#FFFFFF", bgcolor="#264F78", bold=True),
-    "badge.cpu": Style(color="#FFFFFF", bgcolor="#373737", bold=True),
-})
+DOCKSTUDIO_THEME = Theme(
+    {
+        # Brand & Panels
+        "brand": Style(color=COLOR_CLAUDE, bold=True),
+        "panel.border": Style(color=COLOR_BORDER),
+        "panel.title": Style(color=COLOR_CLAUDE, bold=True),
+        "panel.subtitle": Style(color=COLOR_INACTIVE),
+        "spinner": Style(color=COLOR_SPINNER, bold=True),
+        "prompt.border": Style(color=COLOR_BORDER),
+        # State Semantics
+        "success": Style(color=COLOR_SUCCESS, bold=True),
+        "warning": Style(color=COLOR_WARNING, bold=True),
+        "error": Style(color=COLOR_ERROR, bold=True),
+        "muted": Style(color=COLOR_INACTIVE),
+        "dim": Style(color=COLOR_SUBTLE),
+        "highlight": Style(color=COLOR_PERMISSION, bold=True),
+        "plan": Style(color=COLOR_PLAN_MODE, bold=True),
+        # Scientific & Affinity scoring
+        "energy.excellent": Style(color=COLOR_SUCCESS, bold=True),  # < -9.0 kcal/mol
+        "energy.moderate": Style(color=COLOR_WARNING, bold=True),  # -7.0 ~ -9.0 kcal/mol
+        "energy.poor": Style(color=COLOR_ERROR),  # > -7.0 kcal/mol
+        # Hardware badges
+        "badge.gpu": Style(color="#FFFFFF", bgcolor="#264F78", bold=True),
+        "badge.cpu": Style(color="#FFFFFF", bgcolor="#373737", bold=True),
+    }
+)

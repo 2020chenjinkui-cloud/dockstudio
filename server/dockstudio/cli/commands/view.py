@@ -404,15 +404,17 @@ def _parse_receptor_atoms(receptor_text: str) -> list[dict[str, Any]]:
             resname = line[17:20].strip()
             chain = line[21:22].strip() or "A"
             resnr = line[22:26].strip()
-            atoms.append({
-                "elem": elem,
-                "pos": (x, y, z),
-                "resname": resname,
-                "chain": chain,
-                "resnr": resnr,
-                "name": line[12:16].strip(),
-                "res_label": f"{resname}{resnr}:{chain}",
-            })
+            atoms.append(
+                {
+                    "elem": elem,
+                    "pos": (x, y, z),
+                    "resname": resname,
+                    "chain": chain,
+                    "resnr": resnr,
+                    "name": line[12:16].strip(),
+                    "res_label": f"{resname}{resnr}:{chain}",
+                }
+            )
     return atoms
 
 
@@ -437,6 +439,7 @@ def _parse_ligand_atoms_and_mol(pose_text: str) -> tuple[list[dict[str, Any]], C
     if mol is None and ("ATOM" in pose_text or "HETATM" in pose_text):
         try:
             from openbabel import pybel
+
             ob = pybel.readstring("pdbqt", pose_text)
             mol = Chem.MolFromMolBlock(ob.write("sdf"), sanitize=False, removeHs=False)
         except Exception:
@@ -502,9 +505,7 @@ def _calculate_dynamic_interactions(
     hydrophobics: dict[str, dict[str, Any]] = {}
 
     polar_elems = {"N", "O"}
-    hydrophobic_res = {
-        "ALA", "VAL", "LEU", "ILE", "MET", "PHE", "TRP", "PRO", "TYR", "HIS", "CYS"
-    }
+    hydrophobic_res = {"ALA", "VAL", "LEU", "ILE", "MET", "PHE", "TRP", "PRO", "TYR", "HIS", "CYS"}
 
     for la in lig_atoms:
         lp = la["pos"]
@@ -526,7 +527,7 @@ def _calculate_dynamic_interactions(
                     }
             # Hydrophobic / close contacts <= 4.0 Å
             elif d <= 4.0:
-                is_hydro = (le == "C" and re == "C" and ra["resname"] in hydrophobic_res)
+                is_hydro = le == "C" and re == "C" and ra["resname"] in hydrophobic_res
                 if is_hydro:
                     if res_label not in hydrophobics or d < hydrophobics[res_label]["distance"]:
                         hydrophobics[res_label] = {
@@ -570,13 +571,37 @@ def _render_ligand_properties_table(mol: Chem.Mol, ligand_name: str) -> Table:
     aromatic_rings = Descriptors.NumAromaticRings(mol)
 
     table.add_row("分子式 (Formula)", formula, "元素组成守恒")
-    table.add_row("分子量 (MW)", f"{mw:.2f} Da", "[#4EBA65]符合[/#4EBA65]" if mw <= 500 else "[#FFC107]MW > 500 Da[/#FFC107]")
-    table.add_row("脂水分配系数 (cLogP)", f"{logp:.2f}", "[#4EBA65]符合[/#4EBA65]" if logp <= 5.0 else "[#FFC107]LogP > 5.0[/#FFC107]")
-    table.add_row("极性表面积 (TPSA)", f"{tpsa:.2f} Å²", "[#4EBA65]良好透膜性[/#4EBA65]" if tpsa <= 140 else "[#FFC107]TPSA > 140 Å²[/#FFC107]")
-    table.add_row("可旋转键数 (Rotatable Bonds)", str(rot_bonds), "[#4EBA65]柔性合规[/#4EBA65]" if rot_bonds <= 10 else "[#FFC107]柔性较高 (>10)[/#FFC107]")
+    table.add_row(
+        "分子量 (MW)",
+        f"{mw:.2f} Da",
+        "[#4EBA65]符合[/#4EBA65]" if mw <= 500 else "[#FFC107]MW > 500 Da[/#FFC107]",
+    )
+    table.add_row(
+        "脂水分配系数 (cLogP)",
+        f"{logp:.2f}",
+        "[#4EBA65]符合[/#4EBA65]" if logp <= 5.0 else "[#FFC107]LogP > 5.0[/#FFC107]",
+    )
+    table.add_row(
+        "极性表面积 (TPSA)",
+        f"{tpsa:.2f} Å²",
+        "[#4EBA65]良好透膜性[/#4EBA65]" if tpsa <= 140 else "[#FFC107]TPSA > 140 Å²[/#FFC107]",
+    )
+    table.add_row(
+        "可旋转键数 (Rotatable Bonds)",
+        str(rot_bonds),
+        "[#4EBA65]柔性合规[/#4EBA65]" if rot_bonds <= 10 else "[#FFC107]柔性较高 (>10)[/#FFC107]",
+    )
     table.add_row("重原子数 (Heavy Atoms)", str(heavy_atoms), "非氢骨架原子总数")
-    table.add_row("氢键供体数 (HBD)", str(hbd), "[#4EBA65]符合[/#4EBA65]" if hbd <= 5 else "[#FFC107]HBD > 5[/#FFC107]")
-    table.add_row("氢键受体数 (HBA)", str(hba), "[#4EBA65]符合[/#4EBA65]" if hba <= 10 else "[#FFC107]HBA > 10[/#FFC107]")
+    table.add_row(
+        "氢键供体数 (HBD)",
+        str(hbd),
+        "[#4EBA65]符合[/#4EBA65]" if hbd <= 5 else "[#FFC107]HBD > 5[/#FFC107]",
+    )
+    table.add_row(
+        "氢键受体数 (HBA)",
+        str(hba),
+        "[#4EBA65]符合[/#4EBA65]" if hba <= 10 else "[#FFC107]HBA > 10[/#FFC107]",
+    )
     table.add_row("芳香环数量 (Aromatic Rings)", str(aromatic_rings), "芳香体系环数")
     return table
 
@@ -592,15 +617,21 @@ def _render_receptor_summary_table(rec_atoms: list[dict[str, Any]], receptor_nam
     table.add_column("数值 / 统计 (Value)", style="#93A5FF", justify="left", width=22)
     table.add_column("说明 (Description)", style="#999999")
 
-    chains = sorted(list({a["chain"] for a in rec_atoms}))
+    chains = sorted({a["chain"] for a in rec_atoms})
     res_set = {a["res_label"] for a in rec_atoms}
-    res_types = sorted(list({a["resname"] for a in rec_atoms}))
+    res_types = sorted({a["resname"] for a in rec_atoms})
     heavy_count = len(rec_atoms)
 
-    table.add_row("链标识 (Chains)", ", ".join(chains) if chains else "A", f"共 {len(chains)} 条肽链")
+    table.add_row(
+        "链标识 (Chains)", ", ".join(chains) if chains else "A", f"共 {len(chains)} 条肽链"
+    )
     table.add_row("残基总数 (Residues)", str(len(res_set)), "非氢标准残基与辅因子计数")
     table.add_row("重原子总数 (Heavy Atoms)", str(heavy_count), "蛋白质非氢骨架与侧链原子")
-    table.add_row("主要残基种类 (Residue Types)", f"{len(res_types)} 种", ", ".join(res_types[:8]) + ("..." if len(res_types) > 8 else ""))
+    table.add_row(
+        "主要残基种类 (Residue Types)",
+        f"{len(res_types)} 种",
+        ", ".join(res_types[:8]) + ("..." if len(res_types) > 8 else ""),
+    )
     return table
 
 
@@ -647,7 +678,10 @@ def _run_rdkit_qc_checks(
         conf = mol.GetConformer()
         heavy = [i for i in range(mol.GetNumAtoms()) if mol.GetAtomWithIdx(i).GetSymbol() != "H"]
         bonded = {
-            (min(b.GetBeginAtomIdx(), b.GetEndAtomIdx()), max(b.GetBeginAtomIdx(), b.GetEndAtomIdx()))
+            (
+                min(b.GetBeginAtomIdx(), b.GetEndAtomIdx()),
+                max(b.GetBeginAtomIdx(), b.GetEndAtomIdx()),
+            )
             for b in mol.GetBonds()
         }
         neighbors: dict[int, set[int]] = {}
@@ -665,7 +699,7 @@ def _run_rdkit_qc_checks(
         min_d = math.inf
         clash_pair = None
         for a_idx, i in enumerate(heavy):
-            for j in heavy[a_idx + 1:]:
+            for j in heavy[a_idx + 1 :]:
                 if (i, j) in bonded:
                     continue
                 thresh = 1.9 if (i, j) in geminal else 1.6
@@ -679,7 +713,10 @@ def _run_rdkit_qc_checks(
                 "message": f"原子 {clash_pair[0]}-{clash_pair[1]} 碰撞 ({min_d:.2f} Å < 1.60 Å)",
             }
         else:
-            results["internal_clash"] = {"passed": True, "message": "无配体内部原子严重空间位阻碰撞"}
+            results["internal_clash"] = {
+                "passed": True,
+                "message": "无配体内部原子严重空间位阻碰撞",
+            }
 
     # 4. Protein clash check (when receptor is available)
     if rec_atoms and mol.GetNumConformers() > 0 and has_3d:
@@ -692,9 +729,7 @@ def _run_rdkit_qc_checks(
         min_rec_d = math.inf
         for lp in heavy_pos:
             for ra in rec_atoms:
-                d = math.dist((lp.x, lp.y, lp.z), ra["pos"])
-                if d < min_rec_d:
-                    min_rec_d = d
+                min_rec_d = min(min_rec_d, math.dist((lp.x, lp.y, lp.z), ra["pos"]))
         if min_rec_d < 1.8:
             results["minimum_distance_to_protein"] = {
                 "passed": False,
@@ -786,7 +821,9 @@ def render_ascii_mode(
         console.print(_render_receptor_summary_table(rec_atoms, target_path.stem))
         console.print("[#999999]当前仅载入受体蛋白结构，未提供配体构象，无相互作用力分析。[/]\n")
     else:
-        console.print("[bold #FF6B80]未能识别或解析有效的受体或配体分子数据 (支持 PDB, PDBQT, SDF)[/bold #FF6B80]\n")
+        console.print(
+            "[bold #FF6B80]未能识别或解析有效的受体或配体分子数据 (支持 PDB, PDBQT, SDF)[/bold #FF6B80]\n"
+        )
 
     qc_data = _run_rdkit_qc_checks(mol, rec_atoms if rec_atoms else None)
     console.print(render_posecheck_table(qc_data))
@@ -829,12 +866,16 @@ def run_view(
         else:
             sdf_files = sorted(
                 target.glob("*.sdf"),
-                key=lambda p: int(re.search(r"\d+", p.stem).group()) if re.search(r"\d+", p.stem) else 0,
+                key=lambda p: (
+                    int(re.search(r"\d+", p.stem).group()) if re.search(r"\d+", p.stem) else 0
+                ),
             )
             if not sdf_files:
                 sdf_files = sorted(
                     (target / "poses").glob("*.sdf"),
-                    key=lambda p: int(re.search(r"\d+", p.stem).group()) if re.search(r"\d+", p.stem) else 0,
+                    key=lambda p: (
+                        int(re.search(r"\d+", p.stem).group()) if re.search(r"\d+", p.stem) else 0
+                    ),
                 )
             poses_list = [f.read_text(encoding="utf-8", errors="replace") for f in sdf_files]
     elif target.is_file():
@@ -915,12 +956,14 @@ def run_view(
     announcement.append(f"已就绪 ({len(poses_list)} 个构象) · 即用即焚微型服务\n", style="#CCCCCC")
 
     console.print(make_header())
-    console.print(make_pane(
-        "DockStudio 微型 3D 分子构象预览服务",
-        announcement,
-        subtitle="按 [Enter] 或 [Ctrl+C] 退出并释放端口",
-        title_style="bold #D77757",
-    ))
+    console.print(
+        make_pane(
+            "DockStudio 微型 3D 分子构象预览服务",
+            announcement,
+            subtitle="按 [Enter] 或 [Ctrl+C] 退出并释放端口",
+            title_style="bold #D77757",
+        )
+    )
 
     # Wait for exit trigger
     try:

@@ -71,7 +71,9 @@ class LigandQCProfile(BaseModel):
     pains_names: list[str] = Field(default_factory=list)
     has_brenk: bool = False
     brenk_names: list[str] = Field(default_factory=list)
-    tcm_alerts: list[str] = Field(default_factory=list)  # e.g. ["Catechol_Polyphenol", "Quinone_Redox"]
+    tcm_alerts: list[str] = Field(
+        default_factory=list
+    )  # e.g. ["Catechol_Polyphenol", "Quinone_Redox"]
     pass_all: bool = True
 
     # Physicochemical & descriptor properties (defaults for full forward-compatibility)
@@ -93,7 +95,7 @@ class LigandQCProfile(BaseModel):
     pains_alerts: list[str] = Field(default_factory=list)
     tcm_warnings: list[str] = Field(default_factory=list)
 
-    def model_post_init(self, __context: Any) -> None:
+    def model_post_init(self, __context: Any, /) -> None:
         """Harmonize dual naming conventions and evaluate pass_all."""
         if self.pains_names and not self.pains_alerts:
             self.pains_alerts = list(self.pains_names)
@@ -464,7 +466,9 @@ class ScreeningCandidateRow(BaseModel):
     smiles: str = ""
     affinity_mean: float = 0.0  # kcal/mol (多 seed 均值)
     affinity_std: float = 0.0  # kcal/mol (多 seed 标准差)
-    affinity_seed0: float | None = None  # kcal/mol (主种子 seed_0 单次对接值, 供 /verify T1 重算对齐)
+    affinity_seed0: float | None = (
+        None  # kcal/mol (主种子 seed_0 单次对接值, 供 /verify T1 重算对齐)
+    )
     pose_rmsd_seed: float | None = None  # 跨种子构象自洽 RMSD (Å)
     le: float = 0.0  # Ligand Efficiency (-dG / N_heavy)
     sile: float = 0.0  # Size-Independent LE (-dG / N_heavy^0.3)

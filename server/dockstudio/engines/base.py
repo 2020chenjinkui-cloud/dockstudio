@@ -167,4 +167,3 @@ class BaseEngine:
 
     def cancel_current(self) -> None:
         """Default cancellation hook; subclasses override with process termination."""
-        pass

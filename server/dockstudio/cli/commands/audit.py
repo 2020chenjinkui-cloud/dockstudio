@@ -43,7 +43,9 @@ def compute_sha256_chunked(path: Path) -> str:
     return digest.hexdigest()
 
 
-def parse_events_jsonl(events_path: Path, subject_ids: set[str] | None = None) -> list[dict[str, Any]]:
+def parse_events_jsonl(
+    events_path: Path, subject_ids: set[str] | None = None
+) -> list[dict[str, Any]]:
     """Robustly reads JSONL event logs, ignoring blank or crash-torn trailing lines."""
     if not events_path.is_file():
         return []
@@ -94,7 +96,9 @@ def resolve_job_data(
             with zipfile.ZipFile(candidate) as zf:
                 namelist = set(zf.namelist())
                 if "snapshot.json" in namelist:
-                    snapshot = json.loads(zf.read("snapshot.json").decode("utf-8", errors="replace"))
+                    snapshot = json.loads(
+                        zf.read("snapshot.json").decode("utf-8", errors="replace")
+                    )
                     job = Job.model_validate(snapshot["job"]) if "job" in snapshot else None
                     hashes = snapshot.get("inputs", {})
                     events = []
@@ -121,7 +125,9 @@ def resolve_job_data(
 
         if job_file.is_file():
             try:
-                job = Job.model_validate_json(job_file.read_text(encoding="utf-8", errors="replace"))
+                job = Job.model_validate_json(
+                    job_file.read_text(encoding="utf-8", errors="replace")
+                )
             except Exception:
                 pass
         elif snapshot_file.is_file():
@@ -213,9 +219,18 @@ def run_audit(job_id_or_path: str, options: dict[str, Any] | None = None) -> int
     if job.started_at and job.finished_at:
         dur_str = f"{(job.finished_at - job.started_at).total_seconds():.2f}s"
 
-    meta_table.add_row("任务编号 (Job ID)", f"[bold #D77757]{job.id}[/bold #D77757]", "所属项目", f"{project_name} ({job.project_id})")
-    meta_table.add_row("对接引擎", f"[bold #93A5FF]{req.engine}[/bold #93A5FF]", "任务状态", st_badge)
-    meta_table.add_row("创建时间", job.created_at.strftime("%Y-%m-%d %H:%M:%S"), "总计耗时", dur_str)
+    meta_table.add_row(
+        "任务编号 (Job ID)",
+        f"[bold #D77757]{job.id}[/bold #D77757]",
+        "所属项目",
+        f"{project_name} ({job.project_id})",
+    )
+    meta_table.add_row(
+        "对接引擎", f"[bold #93A5FF]{req.engine}[/bold #93A5FF]", "任务状态", st_badge
+    )
+    meta_table.add_row(
+        "创建时间", job.created_at.strftime("%Y-%m-%d %H:%M:%S"), "总计耗时", dur_str
+    )
     meta_table.add_row("受体编号", f"`{req.receptor_id}`", "配体编号", f"`{req.ligand_id}`")
 
     console.print(make_pane("任务基础信息与元数据", meta_table, subtitle=f"ID: {job.id}"))
@@ -255,7 +270,11 @@ def run_audit(job_id_or_path: str, options: dict[str, Any] | None = None) -> int
         )
     else:
         for key, exp_hash in expected_hashes.items():
-            file_path = target_files.get(key) or target_files.get(f"{key}.pdbqt") or target_files.get(f"{key}.pdb")
+            file_path = (
+                target_files.get(key)
+                or target_files.get(f"{key}.pdbqt")
+                or target_files.get(f"{key}.pdb")
+            )
             exp_short = f"{exp_hash[:10]}...{exp_hash[-8:]}" if len(exp_hash) > 18 else exp_hash
             if file_path and file_path.is_file():
                 live_hash = compute_sha256_chunked(file_path)
@@ -281,8 +300,13 @@ def run_audit(job_id_or_path: str, options: dict[str, Any] | None = None) -> int
     env_text = Text()
     if job.env:
         env = job.env
-        env_text.append(f"• Python: {env.python or '—'}  • 操作系统: {env.platform or '—'}\n", style="#CCCCCC")
-        env_text.append(f"• RDKit: {env.rdkit or '未安装'}  • Meeko: {env.meeko or '未安装'}  • OpenBabel: {env.openbabel or '未安装'}\n", style="#999999")
+        env_text.append(
+            f"• Python: {env.python or '—'}  • 操作系统: {env.platform or '—'}\n", style="#CCCCCC"
+        )
+        env_text.append(
+            f"• RDKit: {env.rdkit or '未安装'}  • Meeko: {env.meeko or '未安装'}  • OpenBabel: {env.openbabel or '未安装'}\n",
+            style="#999999",
+        )
     else:
         env_text.append("• 运行环境快照: 任务记录于环境指纹模块上线之前\n", style="#999999")
 
@@ -330,23 +354,46 @@ def run_audit(job_id_or_path: str, options: dict[str, Any] | None = None) -> int
                 payload = payload[:72] + "..."
             event_table.add_row(ts, action, actor, payload)
 
-        console.print(make_pane("事理链时序流 (Event Log)", event_table, subtitle=f"共 {len(events)} 条记录"))
+        console.print(
+            make_pane("事理链时序流 (Event Log)", event_table, subtitle=f"共 {len(events)} 条记录")
+        )
 
     # 6. Cryptographic Seal / Audit Verdict
     seal_text = Text()
     if tampered:
         seal_text.append("✗ 审计结论: 检测到资产指纹不一致或数据篡改！\n", style="bold #FF6B80")
-        seal_text.append("• 实体文件 SHA256 哈希与初始记录不吻合，该计算成果不具备合规证明效力。\n", style="#FF6B80")
-        seal_text.append("• 建议核实受影响文件是否曾被第三方编辑器修改或外部重新写入。\n", style="#999999")
-        console.print(make_pane("密码学审计印章 (Cryptographic Seal)", seal_text, border_style=COLOR_ERROR))
+        seal_text.append(
+            "• 实体文件 SHA256 哈希与初始记录不吻合，该计算成果不具备合规证明效力。\n",
+            style="#FF6B80",
+        )
+        seal_text.append(
+            "• 建议核实受影响文件是否曾被第三方编辑器修改或外部重新写入。\n", style="#999999"
+        )
+        console.print(
+            make_pane("密码学审计印章 (Cryptographic Seal)", seal_text, border_style=COLOR_ERROR)
+        )
         return 1
     elif verified_count > 0:
-        seal_text.append("✓ 审计结论: SHA256 完整性校验 100% 吻合 · 事理链闭合\n", style="bold #4EBA65")
-        seal_text.append(f"• 成功验证 {verified_count} 个核心资产指纹，全生命周期无任何篡改痕迹。\n", style="#4EBA65")
-        seal_text.append(f"• 审计验证时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} · 具备学术与外包交付合规效力。\n", style="#999999")
-        console.print(make_pane("密码学审计印章 (Cryptographic Seal)", seal_text, border_style=COLOR_SUCCESS))
+        seal_text.append(
+            "✓ 审计结论: SHA256 完整性校验 100% 吻合 · 事理链闭合\n", style="bold #4EBA65"
+        )
+        seal_text.append(
+            f"• 成功验证 {verified_count} 个核心资产指纹，全生命周期无任何篡改痕迹。\n",
+            style="#4EBA65",
+        )
+        seal_text.append(
+            f"• 审计验证时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} · 具备学术与外包交付合规效力。\n",
+            style="#999999",
+        )
+        console.print(
+            make_pane("密码学审计印章 (Cryptographic Seal)", seal_text, border_style=COLOR_SUCCESS)
+        )
         return 0
     else:
-        seal_text.append("▲ 审计结论: 未发现篡改，但未找到足够基线指纹进行比对。\n", style="bold #FFC107")
-        console.print(make_pane("密码学审计印章 (Cryptographic Seal)", seal_text, border_style=COLOR_WARNING))
+        seal_text.append(
+            "▲ 审计结论: 未发现篡改，但未找到足够基线指纹进行比对。\n", style="bold #FFC107"
+        )
+        console.print(
+            make_pane("密码学审计印章 (Cryptographic Seal)", seal_text, border_style=COLOR_WARNING)
+        )
         return 0

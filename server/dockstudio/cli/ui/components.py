@@ -31,7 +31,7 @@ def get_terminal_width(default: int = 90) -> int:
     try:
         width = shutil.get_terminal_size((default, 24)).columns
         return max(60, min(width, 120))
-    except Exception:  # noqa: BLE001
+    except Exception:  # 降级兜底
         return default
 
 

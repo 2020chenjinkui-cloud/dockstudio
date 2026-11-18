@@ -573,7 +573,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if selected is None or "diagram" in selected:
             try:
                 diagram_svg = _diagram_for_job(job, 1)
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:  # 降级兜底
                 log.warning("diagram generation failed (non-fatal): %s", exc)
         ligand = registry.ligands.get(job.request.ligand_id)
         if project is None:  # project was soft-deleted; build a transient shell

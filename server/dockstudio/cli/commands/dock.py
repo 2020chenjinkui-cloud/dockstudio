@@ -34,10 +34,14 @@ def check_pose_quality(pose_sdf: Path) -> dict[str, Any]:
         return {
             "passed_count": max(0, 18 - len(res.issues)),
             "details": "; ".join(i.message for i in res.issues),
-            "results": {i.rule: {"passed": i.severity != "error", "message": i.message} for i in res.issues},
+            "results": {
+                i.rule: {"passed": i.severity != "error", "message": i.message} for i in res.issues
+            },
         }
     except Exception:
         return {"passed_count": 18, "details": "", "results": {}}
+
+
 from ...config import get_settings
 from ...engines import available_engines, get_engine
 from ...models import Box, DockParams
@@ -117,7 +121,9 @@ def run_dock_interactive(demo: bool = False) -> int:
 
     # Step 3: Ligand
     _refresh_step_canvas(3, 5, "小分子配体结构加载与构象准备")
-    console.print(f"[dim]已定义搜索盒: 质心 ({box.center[0]:.1f}, {box.center[1]:.1f}, {box.center[2]:.1f}) · 尺寸 {box.size[0]:.1f}Å[/dim]\n")
+    console.print(
+        f"[dim]已定义搜索盒: 质心 ({box.center[0]:.1f}, {box.center[1]:.1f}, {box.center[2]:.1f}) · 尺寸 {box.size[0]:.1f}Å[/dim]\n"
+    )
 
     if demo:
         fixtures = Path(__file__).resolve().parents[3] / "tests" / "fixtures"
@@ -146,7 +152,9 @@ def run_dock_interactive(demo: bool = False) -> int:
 
     console.print("[bold #D77757]正在启动对接计算...[/bold #D77757]")
     t0 = time.time()
-    with console.status(f"[bold #93A5FF]计算中: 引擎={engine_name}, 打分={scoring}, 构象搜索中...[/bold #93A5FF]"):
+    with console.status(
+        f"[bold #93A5FF]计算中: 引擎={engine_name}, 打分={scoring}, 构象搜索中...[/bold #93A5FF]"
+    ):
         result = engine.dock(
             Path(receptor.pdbqt_path),
             Path(ligand.pdbqt_path),
@@ -154,11 +162,13 @@ def run_dock_interactive(demo: bool = False) -> int:
             params,
             run_dir,
         )
-        # Export poses to SDF
-        exported_sdf = export_poses(run_dir / "out.pdbqt", run_dir)
+        # Export poses to SDF（副作用写盘即可，返回值不参与后续计算）
+        export_poses(run_dir / "out.pdbqt", run_dir)
     elapsed = time.time() - t0
 
-    console.print(f"[bold #4EBA65]✓ 对接完成![/bold #4EBA65] 耗时: {elapsed:.2f}s · 产出构象: {len(result.poses)} 个 · 目录: {run_dir.name}\n")
+    console.print(
+        f"[bold #4EBA65]✓ 对接完成![/bold #4EBA65] 耗时: {elapsed:.2f}s · 产出构象: {len(result.poses)} 个 · 目录: {run_dir.name}\n"
+    )
 
     # Step 6: Post-dock QC & PLIP Analysis
     _display_results_and_qc(pdb_path, receptor, lig_name, result, run_dir)
@@ -169,13 +179,15 @@ def _select_search_box(pdb_path: Path, receptor: Any) -> Box:
     """Interactively select or define the docking box."""
     choices = []
     cocrystals = receptor.cocrystal_ligands or []
-    
+
     if cocrystals:
         for c in cocrystals:
-            choices.append((
-                f"围绕共晶配体自动外包盒: {c.resname}:{c.chain}",
-                f"质心: ({c.center[0]:.1f}, {c.center[1]:.1f}, {c.center[2]:.1f}) · 尺寸 22.5Å",
-            ))
+            choices.append(
+                (
+                    f"围绕共晶配体自动外包盒: {c.resname}:{c.chain}",
+                    f"质心: ({c.center[0]:.1f}, {c.center[1]:.1f}, {c.center[2]:.1f}) · 尺寸 22.5Å",
+                )
+            )
 
     choices.append(("运行腔体预测算法 (fpocket / 几何网格)", "在受体全表面自动寻找潜在活性口袋"))
     choices.append(("手动指定盒子坐标与尺寸", "手动输入 Center X/Y/Z 与 Size X/Y/Z"))
@@ -185,7 +197,7 @@ def _select_search_box(pdb_path: Path, receptor: Any) -> Box:
     if cocrystals and idx < len(cocrystals):
         c = cocrystals[idx]
         return Box(center=c.center, size=(22.5, 22.5, 22.5))
-    
+
     if (cocrystals and idx == len(cocrystals)) or (not cocrystals and idx == 0):
         # Pocket detection
         with console.status("[bold #93A5FF]正在分析受体表面几何腔体...[/bold #93A5FF]"):
@@ -193,9 +205,12 @@ def _select_search_box(pdb_path: Path, receptor: Any) -> Box:
         if not pockets:
             console.print("[#FFC107]未能自动识别明显口袋，切换为默认受体几何中心[/#FFC107]")
             return Box(center=(0.0, 0.0, 0.0), size=(25.0, 25.0, 25.0))
-        
+
         pocket_choices = [
-            (f"口袋 #{p.id} (评分: {p.score:.1f})", f"中心: ({p.center[0]:.1f}, {p.center[1]:.1f}, {p.center[2]:.1f}) · 尺寸: ({p.size[0]:.1f}, {p.size[1]:.1f}, {p.size[2]:.1f})")
+            (
+                f"口袋 #{p.id} (评分: {p.score:.1f})",
+                f"中心: ({p.center[0]:.1f}, {p.center[1]:.1f}, {p.center[2]:.1f}) · 尺寸: ({p.size[0]:.1f}, {p.size[1]:.1f}, {p.size[2]:.1f})",
+            )
             for p in pockets
         ]
         p_idx = select_one("选择预测口袋:", pocket_choices, default=0)
@@ -216,7 +231,7 @@ def _select_docking_params(settings: Any) -> tuple[str, str, DockParams]:
     engines = available_engines()
     engine_choices = []
     default_idx = 0
-    
+
     for i, eng in enumerate(engines):
         ok, reason = eng.is_available()
         is_gpu = bool(getattr(eng.manifest, "requires_gpu", False))
@@ -231,7 +246,10 @@ def _select_docking_params(settings: Any) -> tuple[str, str, DockParams]:
 
     scoring = chosen_eng.manifest.scoring_functions[0]
     if len(chosen_eng.manifest.scoring_functions) > 1:
-        sc_choices = [(sc, f"{chosen_eng.manifest.name} 支持的打分函数") for sc in chosen_eng.manifest.scoring_functions]
+        sc_choices = [
+            (sc, f"{chosen_eng.manifest.name} 支持的打分函数")
+            for sc in chosen_eng.manifest.scoring_functions
+        ]
         sc_idx = select_one("选择打分函数:", sc_choices, default=0)
         scoring = chosen_eng.manifest.scoring_functions[sc_idx]
 
@@ -278,12 +296,16 @@ def _display_results_and_qc(
         analysis = analyze_pose(pdb_path, pose_sdf, run_dir) if pose_sdf.is_file() else None
         contacts = analysis.interactions if analysis else []
         analyses.append({"index": pose.index, "contacts": contacts, "raw": analysis})
-        
+
         hb_count = sum(1 for c in contacts if getattr(c, "type", "") == "hbond")
         hydro_count = sum(1 for c in contacts if getattr(c, "type", "") == "hydrophobic")
         contact_str = f"[#4EBA65]{hb_count} 氢键[/#4EBA65] · [#93A5FF]{hydro_count} 疏水[/#93A5FF]"
 
-        rmsd_str = f"{pose.rmsd_lb:.2f} / {pose.rmsd_ub:.2f}" if pose.rmsd_lb is not None and pose.rmsd_ub is not None else "0.00 / 0.00"
+        rmsd_str = (
+            f"{pose.rmsd_lb:.2f} / {pose.rmsd_ub:.2f}"
+            if pose.rmsd_lb is not None and pose.rmsd_ub is not None
+            else "0.00 / 0.00"
+        )
         table.add_row(
             f"#{pose.index}",
             format_affinity(pose.affinity),
@@ -297,8 +319,14 @@ def _display_results_and_qc(
     # Interactive inspection loop with in-place refresh
     while True:
         action_choices = [
-            ("查看 Top 1 构象的 PLIP 微观相互作用树", "在终端打印氢键、盐桥、π-π、疏水接触残基与距离"),
-            ("查看 Top 1 构象的 PoseBusters 18 项质检明细", "查看立体化学、几何碰撞、键长键角合规列表"),
+            (
+                "查看 Top 1 构象的 PLIP 微观相互作用树",
+                "在终端打印氢键、盐桥、π-π、疏水接触残基与距离",
+            ),
+            (
+                "查看 Top 1 构象的 PoseBusters 18 项质检明细",
+                "查看立体化学、几何碰撞、键长键角合规列表",
+            ),
             ("导出审计包 (audit.zip)", "生成包含输入 SHA256、参数快照、运行环境与姿态的审计归档"),
             ("结束并返回", "退出当前向导"),
         ]
@@ -332,7 +360,7 @@ def _display_results_and_qc(
 
             from ...analysis.audit import build_audit_zip
             from ...models import DockJobRequest, Job, JobStatus
-            
+
             job = Job(
                 id=uuid.uuid4().hex[:8],
                 project_id="cli_dock",
