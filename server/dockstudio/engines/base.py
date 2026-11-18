@@ -82,9 +82,19 @@ def validate_receptor_file(receptor_path: Path) -> int:
 
     A 0-byte (or atom-less) PDBQT makes gnina and vina *succeed* with
     ``affinity == 0.0`` plus random CNN values, which downstream code cannot tell
-    apart from a real hit (GN-04, confirmed on a P4).  Both the generic adapters
-    and the HTVS runners call this before launching an engine, so the failure
+    apart from a real hit (GN-04, confirmed on a P4).  The failure therefore
     surfaces as a readable Chinese ``DockingError`` instead of a pseudo pose.
+
+    Call sites (accurate as of 2.0.5 - this is *not* a base-class hook, so an
+    engine added later must call it explicitly):
+
+    * ``VinaEngine.dock`` - inherited by ``GninaEngine``/``UniDockEngine`` for the
+      single-ligand path (``UniDockEngine`` overrides only the batch path);
+    * ``UniDockEngine.dock_batch`` - the native GPU batch entry point.
+
+    ``BaseEngine.dock``/``dock_batch`` are Protocols/fallbacks and do **not**
+    call it, so a custom engine can still bypass the guard (see
+    docs/fixes/gnina-rescore-2026-11-18.md, finding T9-F2).
     """
     try:
         stat = receptor_path.stat()

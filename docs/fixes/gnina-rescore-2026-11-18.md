@@ -2,7 +2,7 @@
 
 - **日期**：2026-11-18
 - **任务**：t8 —— 修掉 Tier-2 GNINA 原位重打分完全不可用的缺陷，并消灭该路径上的静默降级
-- **分支**：`fix/gnina-rescore` @ `/home/kui/wt/gnina-fix`（基线 `main` = `852d26c`；9 文件 +1092 / −42）
+- **分支**：`fix/gnina-rescore` @ `/home/kui/wt/gnina-fix`（基线 `main` = `852d26c`；当前 tip `9397ecf`，9 文件 +1183 / −49）
 - **未合 main、未 push**（按约定由 integrator 串行处理）
 - **前置证据**：`docs/qa/gnina-real-machine-2026-11-18.md`（t2 的真机取证，GN-01…GN-12）
 
@@ -29,7 +29,7 @@
 | GN-08b | 多模型 `out.pdbqt` 在 ENDMDL 处炸 | gnina PDBQT 解析器不接受 `ENDMDL`，只吃单 model | `GninaEngine._prepare_staged_ligand()`：MODEL 1 + 去 ENDMDL（取舍见 §6） |
 | GN-08c | 失败被 `except Exception: pass` 吞掉，CNN 列恒空 | `screen_runner.py:2457-2458` | 抽出 `screen_runner.gnina_cnn_rescore()`，**任何**不成功都返回结构化标记；`_run_tier3` 把标记写进候选行 `alerts` |
 | GN-03 | CNN 字段缺失静默 None | 解析器与适配器都不检查 | `parse_gnina_out()` warning + `GninaEngine._degradation_notes()` → `DockResult.log` 追加 `DEGRADED GNINA_CNN_MISSING:…` |
-| GN-04 | 空受体返回 `affinity=0.0` 伪 pose | 无任何输入校验 | `engines/base.py::validate_receptor_file()`（带 `lru_cache` 的原子计数），`VinaEngine.dock()` 启动引擎前调用；四个引擎（vina/smina/gnina/unidock）全部继承到 |
+| GN-04 | 空受体返回 `affinity=0.0` 伪 pose | 无任何输入校验 | `engines/base.py::validate_receptor_file()`（带 `lru_cache` 的原子计数），`VinaEngine.dock()` 启动引擎前调用（smina/gnina 走该入口）；**unidock 的 `dock_batch()` 是独立入口，已单独接线**（T9-F2）。`BaseEngine.dock`/`dock_batch` 是协议/兜底，不会自动调用——不要写成「四个引擎全部继承」 |
 
 ---
 
@@ -214,7 +214,7 @@ $ cd /home/kui/wt/gnina-fix && DOCKSTUDIO_REAL_GPU=1 \
 
 $ cd /home/kui/wt/gnina-fix && ruff check server/dockstudio && ruff format --check server/dockstudio
 All checks passed!
-54 files already formatted
+53 files already formatted
 ```
 
 （`ruff` = `/home/kui/miniconda3/envs/ai-gpu/bin/ruff`，0.16.10，沿用 t4 锁定的显式 `select`。）
@@ -233,7 +233,7 @@ run 2 (889.27s): 1 failed, 512 passed, 25 skipped
 run 3 (892.72s): 2 failed, 512 passed, 25 skipped
   FAILED tests/test_adversarial_m3_challenger2.py::test_concurrent_crash_and_resumption
   FAILED tests/test_screen_runner.py::test_checkpoint_interrupt_simulation_and_zero_loss_resume
-run 4 (896.22s, 最终提交 a2ab77f): 0 failed, 514 passed, 25 skipped   ← 全绿
+run 4 (896.22s, 最终提交 9397ecf): 0 failed, 514 passed, 25 skipped   ← 全绿
 ```
 
 逐个复测（各 6 次，main 与本分支同样跑法）：
@@ -247,7 +247,8 @@ run 4 (896.22s, 最终提交 a2ab77f): 0 failed, 514 passed, 25 skipped   ← �
 三个用例在 **main 上同样约 50% 失败** → 既有 flaky，与本次改动无关（与 t5 记录的
 "base 2/6 败、head 3/6 败" 同量级）。三次全量运行的差异只体现在"这次轮到哪一个"。
 
-- 收集数：main `523` → run1/2 树 `538`（+15 新用例）→ 最终提交 `539`（+16）；每次
+- 新增测试文件 `server/tests/test_gnina_rescore_fix.py`：**508 行 / 16 个用例**；
+  收集数：main `523` → run1/2 树 `538`（+15 新用例）→ 最终提交 `539`（+16）；每次
   都是 `passed + skipped + failed == collected`，无用例丢失。
 - 相关子系统专项：`tests/test_screen_runner.py` + `tests/test_cli_screen.py` =
   **46 passed**（102.98 s）；`test_gnina_rescore_fix.py` + `test_gpu_adapters.py` +

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import platform
+import sys
 import textwrap
 from pathlib import Path
 
@@ -130,16 +131,30 @@ def test_gnina_parse_garbage_raises(tmp_path: Path) -> None:
 
 def test_gnina_mock_binary_e2e(tmp_path: Path, monkeypatch) -> None:
     """Whole dock() flow with a fake gnina shell script binary."""
+    # T9-F1: a Python stub with an "env python" shebang instead of a /bin/sh
+    # script - Windows CI has no `sh`, and the old stub made this file fail on
+    # the windows-latest leg of server-test-full.
     script = tmp_path / "gnina"
-    out_content = GNINA_OUT.replace('"', '\\"')
     script.write_text(
-        "#!/bin/sh\n# fake gnina\n"
-        'echo "gnina 1.0 fake"\n'
-        'prev=""\nfor a in "$@"; do\n'
-        '  if [ "$prev" = "--out" ]; then printf \'%s\' "' + out_content + '" > "$a"; fi\n'
-        '  prev="$a"\ndone\n'
-        'echo "1  -9.5  0.0  0.0"\n'
-        'echo "CNNscore 0.98 CNNaffinity -9.9"\nexit 0\n',
+        f"#!{sys.executable}\n"
+        "import sys\n"
+        "from pathlib import Path\n"
+        f"OUT = {GNINA_OUT!r}\n"
+        "args = sys.argv[1:]\n"
+        "if '--version' in args:\n"
+        "    print('gnina 1.0 fake')\n"
+        "    raise SystemExit(0)\n"
+        "prev = ''\n"
+        "out = None\n"
+        "for a in args:\n"
+        "    if prev == '--out':\n"
+        "        out = a\n"
+        "    prev = a\n"
+        "if out:\n"
+        "    Path(out).write_text(OUT, encoding='utf-8')\n"
+        "print('1  -9.5  0.0  0.0')\n"
+        "print('CNNscore 0.98 CNNaffinity -9.9')\n"
+        "raise SystemExit(0)\n",
         encoding="utf-8",
     )
     script.chmod(0o755)
@@ -151,10 +166,6 @@ def test_gnina_mock_binary_e2e(tmp_path: Path, monkeypatch) -> None:
     eng = GninaEngine()
     ok, reason = eng.is_available()
     assert ok, reason
-    if platform.system() == "Windows" or True:
-        # even on Linux CI the shebang script works; on Windows this branch is
-        # skipped below via the shell requirement
-        pass
     result = None
     try:
         work = tmp_path / "run"
@@ -177,7 +188,7 @@ def test_gnina_mock_binary_e2e(tmp_path: Path, monkeypatch) -> None:
             work,
         )
     except Exception as exc:  # noqa: BLE001
-        pytest.skip(f"shell script binary not executable here: {exc}")
+        pytest.skip(f"python-script stub not executable on this host: {exc}")
     assert result is not None
     assert result.poses[0].affinity == pytest.approx(-9.5)
     assert "CNNscore" in result.log

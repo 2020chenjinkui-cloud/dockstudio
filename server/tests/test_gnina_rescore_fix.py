@@ -21,6 +21,7 @@ Each test in this module is written to fail on the pre-fix code:
 from __future__ import annotations
 
 import platform
+import sys
 import textwrap
 from pathlib import Path
 
@@ -96,45 +97,63 @@ MULTI_MODEL_PDBQT = textwrap.dedent(
 )
 
 
+_FAKE_GNINA_PY = """#!__INTERPRETER__
+# Cross-platform stand-in for gnina 1.3.3 (T9-F1): a POSIX ``#!/bin/sh`` stub
+# cannot run on the windows-latest leg of ci.yml's server-test-full matrix.
+import sys
+from pathlib import Path
+
+CNN = __CNN__
+args = sys.argv[1:]
+if "--version" in args:
+    print("gnina 1.3.3")
+    raise SystemExit(0)
+
+Path("argv.txt").write_text("\\n".join(args) + "\\n", encoding="utf-8")
+prev = ""
+out = lig = ""
+for a in args:
+    if prev == "--out":
+        out = a
+    if prev == "--ligand":
+        lig = a
+    prev = a
+
+if lig.endswith(".pdbqt"):
+    text = Path(lig).read_text(encoding="utf-8", errors="replace")
+    if "V2000" in text:
+        sys.stderr.write(f'Parse error on line 2 in file "{lig}": Unknown or inappropriate tag\\n')
+        raise SystemExit(1)
+    if any(line.startswith("ENDMDL") for line in text.splitlines()):
+        sys.stderr.write(f'Parse error on line 92 in file "{lig}": Unknown or inappropriate tag\\n')
+        raise SystemExit(1)
+
+lines = ["MODEL 1", "REMARK minimizedAffinity -11.194829"]
+if CNN:
+    lines += ["REMARK CNNscore 0.860957563", "REMARK CNNaffinity 8.77859974"]
+lines += ["ROOT", "ENDROOT", "ENDMDL"]
+Path(out).write_text("\\n".join(lines) + "\\n", encoding="utf-8")
+print("gnina v1.3.3 (stub)")
+"""
+
+
 def _fake_gnina(tmp_path: Path, *, cnn: bool = True, name: str = "fake_gnina") -> Path:
-    """Shell stub that validates its ligand input the way gnina 1.3.3 does.
+    """Cross-platform stand-in for the gnina binary that validates its input.
+
+    Implemented as a Python script with an ``env python`` shebang rather than a
+    ``/bin/sh`` script: Windows has no ``sh``, so the old POSIX stub made the
+    whole ``server-test-full`` matrix red on windows-latest (finding T9-F1).
+    The behaviour under test - argv handling, PDBQT-vs-SDF rejection, CNN
+    REMARKs - is unchanged.
 
     ``cnn=False`` makes it emit an ``out.pdbqt`` without any CNN REMARK, which is
     how a degraded run looks (GN-03).
     """
-    remarks = (
-        '  printf "%s\\n" "REMARK CNNscore 0.860957563" "REMARK CNNaffinity 8.77859974" >> "$out"\n'
-        if cnn
-        else ""
-    )
     script = tmp_path / name
     script.write_text(
-        "#!/bin/sh\n"
-        'for a in "$@"; do if [ "$a" = "--version" ]; then echo "gnina 1.3.3"; exit 0; fi; done\n'
-        'printf "%s\\n" "$@" > argv.txt\n'
-        'out=""; lig=""; prev=""\n'
-        'for a in "$@"; do\n'
-        '  if [ "$prev" = "--out" ]; then out="$a"; fi\n'
-        '  if [ "$prev" = "--ligand" ]; then lig="$a"; fi\n'
-        '  prev="$a"\n'
-        "done\n"
-        'case "$lig" in\n'
-        "  *.pdbqt)\n"
-        "    if grep -q V2000 \"$lig\" 2>/dev/null; then\n"
-        '      echo "Parse error on line 2 in file \\"$lig\\": Unknown or inappropriate tag" >&2\n'
-        "      exit 1\n"
-        "    fi\n"
-        "    if grep -q '^ENDMDL' \"$lig\" 2>/dev/null; then\n"
-        '      echo "Parse error on line 92 in file \\"$lig\\": Unknown or inappropriate tag" >&2\n'
-        "      exit 1\n"
-        "    fi\n"
-        "    ;;\n"
-        "esac\n"
-        'printf "%s\\n" "MODEL 1" "REMARK minimizedAffinity -11.194829" > "$out"\n'
-        + remarks
-        + 'printf "%s\\n" "ROOT" "ENDROOT" "ENDMDL" >> "$out"\n'
-        'echo "gnina v1.3.3 (stub)"\n'
-        "exit 0\n",
+        _FAKE_GNINA_PY.replace("__CNN__", repr(cnn)).replace(
+            "__INTERPRETER__", sys.executable
+        ),
         encoding="utf-8",
     )
     script.chmod(0o755)

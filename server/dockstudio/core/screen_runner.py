@@ -99,6 +99,16 @@ def calculate_cpu_workers(
     return workers, min(c_total, cpu_job)
 
 
+class _CooperativeCancel(Exception):
+    """Internal signal: the *caller* asked to stop, wrap up gracefully.
+
+    Deliberately a plain ``Exception`` and deliberately **not** the same thing
+    as a hard abort: a cooperative cancel returns the partial report, while a
+    hard abort (KeyboardInterrupt / SystemExit / GeneratorExit) must propagate
+    out of :meth:`ScreeningRunner.run` (see docs/fixes/abort-signal-2026-11-18.md).
+    """
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -1244,7 +1254,19 @@ class ScreeningRunner:
         self.cpu_per_job = max(1, cpu_per_job)
         self.batch_size = max(1, batch_size)
         self.callback = callback
+        # Cooperative cancellation (``cancel()``): graceful early wrap-up, the
+        # report is returned normally so the caller keeps the partial results.
         self._cancel_requested = False
+        # Hard abort (KeyboardInterrupt / SystemExit / GeneratorExit, i.e. a
+        # BaseException raised inside a worker): MUST propagate out of run().
+        # Kept in a *separate* field because "stop asking for more work" and
+        # "the process is going down" are different things - sharing one flag
+        # is what silently turned crashes into successful truncated reports
+        # (see docs/fixes/abort-signal-2026-11-18.md).
+        self._hard_abort: BaseException | None = None
+        # Ligands abandoned because of a hard abort (never scored, never
+        # checkpointed): reported so an aborted run cannot look complete.
+        self._aborted_ids: set[str] = set()
 
         # Tracking state
         self.tier1_passed_ids: list[str] = []
@@ -1336,6 +1358,68 @@ class ScreeningRunner:
     # -----------------------------------------------------------------------
     # Execution helpers: failure accounting, batch capability, pose QC
     # -----------------------------------------------------------------------
+
+    def _record_hard_abort(self, exc: BaseException, ligand_id: str | None = None) -> None:
+        """Remember a hard abort (BaseException) raised inside a worker.
+
+        The *first* abort wins: it is the one that explains the run.  A separate
+        field (not ``_cancel_requested``) is what makes propagation independent
+        of the order in which the consumer happens to read its Futures.
+        """
+        if self._hard_abort is None:
+            self._hard_abort = exc
+        if ligand_id is not None:
+            self._aborted_ids.add(str(ligand_id))
+        log.warning("Hard abort captured (%s) on %s", type(exc).__name__, ligand_id or "<run>")
+
+    def _raise_pending_abort(self) -> None:
+        """Re-raise a captured hard abort (order-independent), else return.
+
+        Every worker-pool consumer calls this *after* its ``as_completed`` loop
+        and *before* finalising.  A crash that landed in a Future the consumer
+        never got around to reading therefore still leaves the function as an
+        exception instead of being dropped on the floor.
+        """
+        exc = self._hard_abort
+        if exc is None:
+            return
+        raise exc
+
+    def _abort_gate(self) -> None:
+        """Worker-side gate: stop starting work once the run is going down.
+
+        Two distinct outcomes, matching the two distinct signals:
+
+        * hard abort known  -> re-raise (a copy of) the original BaseException;
+        * cooperative cancel -> raise :class:`_CooperativeCancel`, which the
+          consumer treats as a graceful stop, not as a failure.
+
+        Without the gate, already-submitted tasks keep docking molecules after
+        the crash (measured on the tiered path: 10 dock calls for a crash on
+        molecule #5), burning GPU time on a run that is discarded anyway.
+        """
+        exc = self._hard_abort
+        if exc is not None:
+            try:
+                raise type(exc)(*getattr(exc, "args", ()))
+            except TypeError:
+                raise KeyboardInterrupt(str(getattr(exc, "args", ("aborted",))[0])) from None
+        if self._cancel_requested:
+            raise _CooperativeCancel()
+
+    def _abandoned_ligand_ids(self) -> list[str]:
+        """Ligands that were never docked and never checkpointed.
+
+        A truncated run must not look complete: these ids are the difference
+        between "screened everything" and "gave up halfway" and are written to
+        ``funnel.csv`` as an explicit ``aborted`` stage row.
+        """
+        processed: set[str] = set(self._dock_failed_ids)
+        try:
+            processed.update(self.checkpoint.load_completed().by_id)
+        except Exception as exc:  # corrupt checkpoint must not hide the abort
+            log.warning("Could not read checkpoint while accounting aborts: %s", exc)
+        return [lid for lid in self.ligand_dict if lid not in processed]
 
     def _mark_dock_failed(self, ligand_id: str) -> None:
         """Records a genuine docking failure (engine crash / no pose / 999 sentinel).
@@ -1457,6 +1541,8 @@ class ScreeningRunner:
         if resume is not None:
             self.resume = resume
         self._cancel_requested = False
+        self._hard_abort = None
+        self._aborted_ids.clear()
 
         log.info(
             "Starting screening run in %s (engine=%s, resume=%s, tiered=%s)",
@@ -1637,13 +1723,15 @@ class ScreeningRunner:
             else:
 
                 def _do_single_dock(lig: PreparedLigand) -> dict[str, Any]:
-                    if self._cancel_requested:
-                        raise KeyboardInterrupt("Docking cancelled")
+                    self._abort_gate()  # hard abort re-raises; cancel -> _CooperativeCancel
                     sub_dir = dock_dir / f"dock_{lig.id}"
                     sub_dir.mkdir(parents=True, exist_ok=True)
                     try:
                         res = self._dock_single_safe(lig, box, params, sub_dir)
-                    except BaseException:
+                    except BaseException as exc:
+                        # Hard abort (Ctrl-C, SystemExit, ...): record it in its
+                        # own slot *and* stop handing out further work.
+                        self._record_hard_abort(exc, lig.id)
                         self._cancel_requested = True
                         raise
                     return self._collect_single_tier_result(lig, res, sub_dir)
@@ -1657,17 +1745,29 @@ class ScreeningRunner:
                         try:
                             res_dict = fut.result()
                             results_by_id[lig.id] = res_dict
-                        except BaseException as exc:
+                        except (KeyboardInterrupt, SystemExit, GeneratorExit) as exc:
+                            # Hard abort: remember it first, then stop the pool so
+                            # no further molecule is docked; the loop tail re-raise
+                            # below is what actually leaves _run_single_tier.
+                            self._record_hard_abort(exc, lig.id)
                             self._cancel_requested = True
                             self._mark_dock_failed(lig.id)
-                            if isinstance(exc, KeyboardInterrupt):
-                                raise
+                            executor.shutdown(wait=False, cancel_futures=True)
+                            break
+                        except _CooperativeCancel:
+                            # The caller asked to stop: graceful wrap-up, the
+                            # partial report is still returned (no exception).
+                            self._cancel_requested = True
+                            break
+                        except Exception as exc:  # one ligand failed, the run lives on
+                            self._mark_dock_failed(lig.id)
                             log.warning("Single-tier worker error on %s: %s", lig.id, exc)
                         if self._cancel_requested:
                             break
                         self._emit_progress(
                             1, "Single-tier Docking", len(results_by_id), total, lig.id, t_start
                         )
+                self._raise_pending_abort()
 
         # Build candidate rows for successful docks
         candidates: list[ScreeningCandidateRow] = []
@@ -1925,9 +2025,16 @@ class ScreeningRunner:
         params = DockParams(exhaustiveness=4, num_modes=1, cpu=cpu_per_job, scoring="vina", seed=42)
 
         def _do_dock(lig: PreparedLigand) -> dict[str, Any]:
+            # Hard abort re-raises; cooperative cancel raises _CooperativeCancel.
+            self._abort_gate()
             sub_dir = work_dir / f"dock_{lig.id}"
             sub_dir.mkdir(parents=True, exist_ok=True)
-            res = self._dock_single_safe(lig, box, params, sub_dir)
+            try:
+                res = self._dock_single_safe(lig, box, params, sub_dir)
+            except BaseException as exc:
+                self._record_hard_abort(exc, lig.id)
+                self._cancel_requested = True
+                raise
             top_aff = res.poses[0].affinity if res.poses else 999.0
             run_dir = str(res.run_dir) if res.run_dir else str(sub_dir)
             if not res.poses or top_aff >= 900.0:
@@ -1956,18 +2063,28 @@ class ScreeningRunner:
         with ThreadPoolExecutor(max_workers=workers) as executor:
             future_to_lig = {executor.submit(_do_dock, lig): lig for lig in pending}
             for fut in as_completed(future_to_lig):
-                if self._cancel_requested:
-                    break
                 lig = future_to_lig[fut]
                 try:
                     res_dict = fut.result()
                     results.append(res_dict)
+                except (KeyboardInterrupt, SystemExit, GeneratorExit) as exc:
+                    self._record_hard_abort(exc, lig.id)
+                    self._cancel_requested = True
+                    self._mark_dock_failed(lig.id)
+                    executor.shutdown(wait=False, cancel_futures=True)
+                    break
+                except _CooperativeCancel:
+                    self._cancel_requested = True
+                    break
                 except Exception as exc:
                     self._mark_dock_failed(lig.id)
                     log.warning("Tier 1 worker error on %s: %s", lig.id, exc)
+                if self._cancel_requested:
+                    break
                 self._emit_progress(
                     1, "Tier 1: HTVS Fast Docking", len(results), total, lig.id, t_start
                 )
+        self._raise_pending_abort()
 
     def _run_tier1_batch(
         self,
@@ -2290,6 +2407,7 @@ class ScreeningRunner:
 
         def _do_multiseed(row: dict[str, Any]) -> dict[str, Any]:
             lig = row["ligand"]
+            self._abort_gate()  # hard abort re-raises; cancel -> _CooperativeCancel
             lig_t2_dir = tier2_dir / f"dock_{lig.id}"
             lig_t2_dir.mkdir(parents=True, exist_ok=True)
             affinities: list[float] = []
@@ -2297,13 +2415,19 @@ class ScreeningRunner:
             seed_dirs: list[str] = []
             pose_files: list[Path | None] = []
             for seed in seeds:
+                self._abort_gate()
                 seed_dir = lig_t2_dir / f"seed_{seed}"
                 seed_dir.mkdir(parents=True, exist_ok=True)
                 seed_dirs.append(str(seed_dir))
                 params = DockParams(
                     exhaustiveness=8, num_modes=9, cpu=cpu_per_job, scoring="vina", seed=seed
                 )
-                dock_res = self._dock_single_safe(lig, box, params, seed_dir)
+                try:
+                    dock_res = self._dock_single_safe(lig, box, params, seed_dir)
+                except BaseException as exc:
+                    self._record_hard_abort(exc, lig.id)
+                    self._cancel_requested = True
+                    raise
                 affinity, pose_mol, pose_file = self._tier2_seed_from_dock_result(
                     lig, dock_res, seed_dir
                 )
@@ -2317,14 +2441,23 @@ class ScreeningRunner:
         with ThreadPoolExecutor(max_workers=workers) as executor:
             fut_map = {executor.submit(_do_multiseed, r): r for r in pending}
             for fut in as_completed(fut_map):
-                if self._cancel_requested:
-                    break
                 row = fut_map[fut]
                 try:
                     results.append(fut.result())
+                except (KeyboardInterrupt, SystemExit, GeneratorExit) as exc:
+                    self._record_hard_abort(exc, row["ligand"].id)
+                    self._cancel_requested = True
+                    self._mark_dock_failed(row["ligand"].id)
+                    executor.shutdown(wait=False, cancel_futures=True)
+                    break
+                except _CooperativeCancel:
+                    self._cancel_requested = True
+                    break
                 except Exception as exc:  # 降级兜底 - isolate one ligand's failure
                     self._mark_dock_failed(row["ligand"].id)
                     log.warning("Tier 2 error on %s: %s", row["ligand"].id, exc)
+                if self._cancel_requested:
+                    break
                 self._emit_progress(
                     2,
                     "Tier 2: SP Balanced Multi-Seed",
@@ -2333,6 +2466,7 @@ class ScreeningRunner:
                     row["ligand"].id,
                     t_start,
                 )
+        self._raise_pending_abort()
 
     def _run_tier2_batch(
         self,
@@ -2731,6 +2865,9 @@ class ScreeningRunner:
     ) -> ScreeningFunnelReport:
         """Exports funnel.csv, screening_results.csv, conf.txt, receptor.pdbqt,
         and poses/ directory, ensuring strict /verify T1~T5 compliance."""
+        # Last line of defence: a captured hard abort must never be turned into
+        # a report that looks like a normal (if short) completed run.
+        self._raise_pending_abort()
         n_docked_success = len(candidates)
         # Funnel mass-conservation (report P1-6.1): aglycone derivatives actually
         # added to the docking pool, genuinely failed docks and funnel threshold
@@ -2738,10 +2875,19 @@ class ScreeningRunner:
         n_aglycone_generated = max(0, len(self.ligand_dict) - n_ready)
         n_dock_failed = len(self._dock_failed_ids)
         n_docking_pool = n_ready + n_aglycone_generated
+        # Molecules the run never got to (hard abort tore it down, or the caller
+        # asked us to stop).  They are NOT "filtered by a threshold": laundering
+        # them into n_funnel_filtered is exactly how a truncated run ended up
+        # closing the T5 identity and looking like a complete one.
+        abandoned_ids = self._abandoned_ligand_ids()
+        self._aborted_ids.update(abandoned_ids)
+        n_abandoned = len(abandoned_ids)
         tiered = bool(self.config.enable_tiered_funnel)
         if tiered:
-            n_funnel_filtered = max(0, n_docking_pool - n_docked_success - n_dock_failed)
-            n_tier1_filtered = max(0, n_t1_in - n_t1_out)
+            n_funnel_filtered = max(
+                0, n_docking_pool - n_docked_success - n_dock_failed - n_abandoned
+            )
+            n_tier1_filtered = max(0, n_t1_in - n_t1_out - min(n_abandoned, n_t1_in - n_t1_out))
             n_tier2_filtered = max(0, n_t2_in - n_t2_out)
             # Engine failures already have their own bucket above; keep the tier
             # detail rows free of them so that (tier1 + tier2) == funnel_filtered.
@@ -2789,6 +2935,22 @@ class ScreeningRunner:
         )
 
         export_funnel_csv(report, funnel_csv)
+        # Explicit "how many molecules were never processed" stage.  It is kept
+        # *outside* the model fields on purpose: /verify T5 closes its identity
+        # only over real loss buckets, so a truncated package fails T5 instead
+        # of looking conserved.  This row is the caller-visible landing point
+        # (docs/fixes/abort-signal-2026-11-18.md §5).
+        abandoned = list(abandoned_ids)
+        if abandoned:
+            with open(funnel_csv, "a", encoding="utf-8", newline="") as f:
+                csv.writer(f).writerow(["aborted", len(abandoned)])
+            log.warning(
+                "RUN TRUNCATED: %d ligand(s) were never docked (%s%s). funnel.csv records "
+                "them as the 'aborted' stage; the package must not be treated as complete.",
+                len(abandoned),
+                ", ".join(abandoned[:5]),
+                ", ..." if len(abandoned) > 5 else "",
+            )
         export_screening_results_csv(candidates, results_csv)
 
         # 2. Export conf.txt for /verify T1, T2, T4, D5

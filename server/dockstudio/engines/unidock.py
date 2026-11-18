@@ -14,7 +14,7 @@ from typing import Any
 from ..config import bundled_engine_binary
 from ..logging import get_logger
 from ..models import Box, DockingError, DockParams, DockResult, EngineUnavailableError
-from .base import EngineManifest
+from .base import EngineManifest, validate_receptor_file
 from .vina import VinaEngine, _key_lines, annotate_error, parse_vina_out
 
 log = get_logger("engines.unidock")
@@ -215,12 +215,7 @@ class UniDockEngine(VinaEngine):
         Executes the entire batch in a single GPU process invocation, avoiding repeated
         receptor grid recalculations and process spawning overhead.
         """
-        # 1. Check engine availability
-        binary = self._binary()
-        version = self._version(binary)
-        self.manifest.version = version
-
-        # 2. Argument-order polymorphism support
+        # 1. Argument-order polymorphism support (cheap, no subprocess)
         if isinstance(receptor_pdbqt, (list, tuple)) and not isinstance(batch, (list, tuple)):
             raw_batch = receptor_pdbqt
             receptor_path = Path(batch)
@@ -228,7 +223,20 @@ class UniDockEngine(VinaEngine):
             raw_batch = batch
             receptor_path = Path(receptor_pdbqt)
 
-        # 3. Normalize batch items to list of (ligand_id, Path)
+        # 2. Reject a receptor that cannot produce a real score *before* spawning
+        # the GPU process: an atom-less PDBQT makes Uni-Dock "succeed" with
+        # affinity 0.0 for every ligand, indistinguishable from real hits
+        # (GN-04 / T9-F2). VinaEngine.dock's guard does not cover this batch
+        # entry point, so the check has to be explicit here - and it runs before
+        # the binary probe so the error is the same on hosts without Uni-Dock.
+        validate_receptor_file(receptor_path)
+
+        # 3. Check engine availability
+        binary = self._binary()
+        version = self._version(binary)
+        self.manifest.version = version
+
+        # 4. Normalize batch items to list of (ligand_id, Path)
         normalized: list[tuple[str, Path]] = []
         for item in raw_batch:
             if isinstance(item, tuple) and len(item) == 2:
@@ -250,12 +258,12 @@ class UniDockEngine(VinaEngine):
         out_dir = work_dir / "dock_out"
         out_dir.mkdir(parents=True, exist_ok=True)
 
-        # 4. Stage receptor locally in work_dir
+        # 5. Stage receptor locally in work_dir
         local_receptor = work_dir / "receptor.pdbqt"
         if receptor_path.resolve() != local_receptor.resolve():
             shutil.copy2(receptor_path, local_receptor)
 
-        # 5. Disambiguate ligand filenames into staging_dir
+        # 6. Disambiguate ligand filenames into staging_dir
         # Since ligands in DockStudio are often named 'ligand.pdbqt' in separate folders,
         # staging them as '<ligand_id>.pdbqt' ensures Uni-Dock produces '<ligand_id>_out.pdbqt'
         # without filename collisions.
@@ -281,12 +289,12 @@ class UniDockEngine(VinaEngine):
             )
             return {}
 
-        # 6. Write --ligand_index file
+        # 7. Write --ligand_index file
         index_file = work_dir / "ligand_index.txt"
         index_lines = [str(staged_path.absolute()) for _, staged_path in valid_items]
         index_file.write_text("\n".join(index_lines) + "\n", encoding="utf-8")
 
-        # 7. Build command
+        # 8. Build command
         cmd = self._build_batch_cmd(
             binary=str(binary),
             box=box,
