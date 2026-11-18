@@ -15,7 +15,13 @@ from pathlib import Path
 from ..config import Settings, get_settings, resolve_vina_binary
 from ..logging import get_logger
 from ..models import Box, DockingError, DockParams, DockResult, EngineUnavailableError, Pose
-from .base import BaseEngine, EngineManifest
+from .base import (
+    SUPPORTED_LIGAND_SUFFIXES,
+    BaseEngine,
+    EngineManifest,
+    log_line,
+    validate_receptor_file,
+)
 
 log = get_logger("engines.vina")
 
@@ -238,6 +244,38 @@ class VinaEngine(BaseEngine):
         """Extra environment for the engine subprocess (smina needs BABEL_LIBDIR)."""
         return None
 
+    # ------------------------------------------------------- input staging
+
+    def _stage_ligand(self, ligand_path: Path, work_dir: Path) -> Path:
+        """Copy the ligand into *work_dir* keeping a format-correct file name.
+
+        Engines pick their parser from the file extension, so the historical
+        "always rename the ligand to ``ligand.pdbqt``" behaviour silently fed
+        exported ``pose_1.sdf`` poses to gnina's PDBQT reader and failed with
+        ``Parse error ... Unknown or inappropriate tag`` (GN-08).  The staged
+        name now mirrors the input suffix; unknown suffixes fall back to PDBQT.
+        """
+        suffix = ligand_path.suffix.lower()
+        if suffix not in SUPPORTED_LIGAND_SUFFIXES:
+            suffix = ".pdbqt"
+        staged = work_dir / f"ligand{suffix}"
+        if ligand_path.resolve() == staged.resolve():
+            # The caller already pointed at our staging name (a retry inside the same
+            # run dir).  Stage a sibling copy instead of rewriting the caller's file:
+            # an in-place normaliser would otherwise truncate e.g. a multi-model
+            # out.pdbqt that is the caller's only copy.
+            staged = work_dir / f"ligand_staged{suffix}"
+        shutil.copy2(ligand_path, staged)
+        return self._prepare_staged_ligand(staged)
+
+    def _prepare_staged_ligand(self, staged: Path) -> Path:
+        """Hook for engines that must rewrite the staged ligand (gnina: PDBQT quirks)."""
+        return staged
+
+    def _degradation_notes(self, poses: list[Pose]) -> list[str]:
+        """Structured markers for scientific signals this run could not deliver."""
+        return []
+
     def _parse_poses(self, out_path: Path, run_log: str) -> list[Pose]:
         return parse_vina_out(out_path)
 
@@ -334,14 +372,17 @@ class VinaEngine(BaseEngine):
         work_dir.mkdir(parents=True, exist_ok=True)
         out_path = work_dir / "out.pdbqt"
 
+        # Reject atom-less receptors before spending a GPU minute on them: an empty
+        # PDBQT yields affinity 0.0 with plausible-looking CNN numbers and reads as
+        # a successful dock (GN-04).
+        validate_receptor_file(receptor_pdbqt)
+
         # vina.exe (MinGW build) cannot reliably open non-ASCII paths; stage
         # inputs in work_dir and pass bare filenames with cwd=work_dir.
         local_receptor = work_dir / "receptor.pdbqt"
-        local_ligand = work_dir / "ligand.pdbqt"
         if receptor_pdbqt.resolve() != local_receptor.resolve():
             shutil.copy2(receptor_pdbqt, local_receptor)
-        if ligand_pdbqt.resolve() != local_ligand.resolve():
-            shutil.copy2(ligand_pdbqt, local_ligand)
+        local_ligand = self._stage_ligand(ligand_pdbqt, work_dir)
         flex_name: str | None = None
         if flex_pdbqt is not None:
             local_flex = work_dir / "flex.pdbqt"
@@ -398,6 +439,13 @@ class VinaEngine(BaseEngine):
             raise DockingError(f"{msg}\n{hint}" if hint else msg)
 
         poses = self._parse_poses(out_path, run_log)
+        notes = self._degradation_notes(poses)
+        if notes:
+            # Appended to DockResult.log so the degradation is visible in the API
+            # response, the CLI output and any saved run log - never silent.
+            run_log = run_log + "\n" + "\n".join(log_line(note) for note in notes)
+            for note in notes:
+                log.warning("%s: %s", self.manifest.name, note)
         return DockResult(
             engine=self.manifest.name,
             engine_version=version,

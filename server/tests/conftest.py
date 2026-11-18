@@ -3,12 +3,24 @@
 from __future__ import annotations
 
 import os
+import sys
 import uuid
 from pathlib import Path
 
 import pytest
 
 FIXTURES = Path(__file__).parent / "fixtures"
+
+# The dev environment installs dockstudio in editable mode with a *meta-path*
+# finder that points at /home/kui/dockstudio/server.  Running pytest from the
+# repo root of a different worktree therefore imported the **main** tree instead
+# of the branch under test: the branch's gnina fix looked absent, and a review
+# round was spent re-running evidence (finding T5-F1).  Put this worktree's
+# server directory first on sys.path so `import dockstudio` always resolves to
+# the code that lives next to this conftest.
+_SERVER_ROOT = str(Path(__file__).resolve().parents[1])
+if _SERVER_ROOT not in sys.path:
+    sys.path.insert(0, _SERVER_ROOT)
 
 
 @pytest.fixture()

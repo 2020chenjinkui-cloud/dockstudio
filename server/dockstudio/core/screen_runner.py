@@ -45,7 +45,12 @@ from ..analysis.scoring_rigor import (
     compute_multiseed_convergence,
 )
 from ..engines import DockEngine, get_engine
-from ..engines.base import BaseEngine
+from ..engines.base import (
+    GNINA_CNN_MISSING,
+    GNINA_RESCORE_UNAVAILABLE,
+    BaseEngine,
+    marker,
+)
 from ..engines.vina import VinaEngine
 from ..logging import get_logger
 from ..models import (
@@ -716,6 +721,74 @@ def restore_pose_mol_with_template(
     return _template_mol_anchored_at_pose(
         ref_no_h, pose_no_h, reference_pose_path=reference_pose_path
     )
+
+
+def gnina_cnn_rescore(
+    engine: DockEngine,
+    receptor_pdbqt: Path,
+    ligand_id: str,
+    top_pose_file: Path | None,
+    box: Box | None,
+    run_dir: Path,
+) -> tuple[float | None, float | None, str | None]:
+    """In-place GNINA CNN rescore of one verified pose; never degrades silently.
+
+    Returns ``(cnn_score, cnn_affinity, degradation_marker)``.  The marker is
+    ``None`` only when plausible CNN numbers were actually obtained; otherwise it
+    is a :func:`dockstudio.engines.base.marker` marker the caller must surface on
+    the candidate row (``Alerts`` column / CLI / run log).
+
+    History: this call used to live inline behind ``except Exception: pass``.  The
+    adapter renamed the pose to ``ligand.pdbqt``, gnina's PDBQT reader rejected it
+    (``Parse error ... Unknown or inappropriate tag``), and the exception vanished —
+    the CNN columns stayed empty for every screen with no trace anywhere
+    (GN-08, see docs/qa/gnina-real-machine-2026-11-18.md).
+    """
+    if top_pose_file is None or not top_pose_file.is_file():
+        return (
+            None,
+            None,
+            marker(GNINA_RESCORE_UNAVAILABLE, f"{ligand_id} 没有可用的对接构象文件"),
+        )
+    try:
+        gnina_res = engine.dock(
+            receptor_pdbqt,
+            top_pose_file,
+            box or Box(center=(0, 0, 0), size=(20, 20, 20)),
+            DockParams(
+                exhaustiveness=1,
+                num_modes=1,
+                minimize=True,
+                score_only=False,
+            ),
+            run_dir / "gnina_rescore",
+        )
+    except Exception as exc:  # 降级兜底 - 引擎不可用时必须留痕，不得静默跳过
+        reason = str(exc).strip() or type(exc).__name__
+        log.warning("GNINA CNN rescore failed for %s: %s", ligand_id, reason)
+        return None, None, marker(GNINA_RESCORE_UNAVAILABLE, reason)
+
+    if not gnina_res.poses:
+        return (
+            None,
+            None,
+            marker(GNINA_RESCORE_UNAVAILABLE, "gnina 重打分未返回任何 pose"),
+        )
+    best = gnina_res.poses[0]
+    if best.cnn_score is None or best.cnn_affinity is None:
+        log.warning(
+            "GNINA CNN rescore for %s returned a pose without CNN values "
+            "(cnn_score=%r, cnn_affinity=%r)",
+            ligand_id,
+            best.cnn_score,
+            best.cnn_affinity,
+        )
+        return (
+            best.cnn_score,
+            best.cnn_affinity,
+            marker(GNINA_CNN_MISSING, "gnina 重打分的 pose 未携带 CNN 打分"),
+        )
+    return best.cnn_score, best.cnn_affinity, None
 
 
 def _find_pose_file_in_dir(run_dir: Path | str | None, ligand_id: str) -> Path | None:
@@ -2370,17 +2443,27 @@ class ScreeningRunner:
             "Tier 3: %d completed from checkpoint, %d pending", len(candidates), len(pending_items)
         )
 
-        # Check GNINA availability once
+        # Check GNINA availability once. The probe itself may fail (broken install,
+        # missing GPU): that is a *configuration* fact the user can see through
+        # /api/engines, so it is logged once instead of being stamped on every
+        # candidate row. Per-row GNINA_RESCORE_UNAVAILABLE / GNINA_CNN_MISSING
+        # markers are reserved for runs that were actually attempted (GN-08/GN-03).
         gnina_eng: DockEngine | None = None
         if self.config.enable_gnina_rescore:
             try:
                 g = get_engine("gnina")
                 if g is not None:
-                    ok, _ = g.is_available()
+                    ok, why = g.is_available()
                     if ok:
                         gnina_eng = g
-            except Exception:
-                pass
+                    else:
+                        log.warning(
+                            "Tier 3: GNINA CNN rescore enabled but engine unavailable: %s", why
+                        )
+                else:
+                    log.warning("Tier 3: GNINA CNN rescore enabled but no gnina engine registered")
+            except Exception as exc:  # 降级兜底 - 探测失败必须留痕，不得静默跳过
+                log.warning("Tier 3: GNINA availability probe failed: %s", exc)
 
         # 2. Evaluate rigor properties on pending items
         for r in pending_items:
@@ -2435,33 +2518,29 @@ class ScreeningRunner:
 
             # D. GNINA CNN score rescore: in-place refinement of the *verified* Tier 2
             #    pose (--minimize) instead of a fresh low-exhaustiveness global search.
+            #    A failed rescore is a scientific degradation, never a silent skip:
+            #    gnina_cnn_rescore() hands back a marker that lands in the candidate
+            #    Alerts column (GN-08/GN-03).
             cnn_score: float | None = None
             cnn_affinity: float | None = None
-            if gnina_eng is not None and top_pose_file is not None and top_pose_file.is_file():
-                try:
-                    gnina_res = gnina_eng.dock(
-                        self.receptor_pdbqt,
-                        top_pose_file,
-                        self.config.box or Box(center=(0, 0, 0), size=(20, 20, 20)),
-                        DockParams(
-                            exhaustiveness=1,
-                            num_modes=1,
-                            minimize=True,
-                            score_only=False,
-                        ),
-                        run_dir / "gnina_rescore",
-                    )
-                    if gnina_res.poses:
-                        cnn_score = gnina_res.poses[0].cnn_score
-                        cnn_affinity = gnina_res.poses[0].cnn_affinity
-                except Exception:
-                    pass
+            gnina_degraded: str | None = None
+            if gnina_eng is not None:
+                cnn_score, cnn_affinity, gnina_degraded = gnina_cnn_rescore(
+                    gnina_eng,
+                    self.receptor_pdbqt,
+                    lig.id,
+                    top_pose_file,
+                    self.config.box,
+                    run_dir,
+                )
 
             # E. Assemble Candidate Row
             alerts: list[str] = []
             if lig.qc_profile:
                 alerts.extend(lig.qc_profile.pains_alerts)
                 alerts.extend(lig.qc_profile.tcm_warnings)
+            if gnina_degraded:
+                alerts.append(gnina_degraded)
             if r.get("qc_fallback_warning"):
                 alerts.append(
                     "HIGH_STRAIN_UNCONVERGED_FALLBACK: 无任何分子通过多 seed 收敛/张力能 "

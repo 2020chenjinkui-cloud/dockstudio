@@ -13,10 +13,11 @@ It is skipped unless ``DOCKSTUDIO_REAL_GPU=1``::
     DOCKSTUDIO_REAL_GPU=1 DOCKSTUDIO_GNINA=/path/to/gnina \\
         pytest server/tests/test_gnina_real_gpu.py -q
 
-Several assertions are ``xfail(strict=False)`` because they encode behaviour
-that the first real-machine run proved wrong (GN-01/GN-04/GN-05/GN-08).  They
-turn into XPASS — not failures — the day the adapter is fixed, and
-``tests/../../docs/qa/gnina-real-machine-2026-11-18.md`` records the evidence.
+GN-04 (empty receptor pseudo-success) and GN-08 (in-place rescore) were fixed in
+``fix/gnina-rescore``; those cases are plain assertions again.  What remains
+``xfail(strict=False)`` is behaviour that is still open (GN-01 missing-file
+exception type, GN-05 pose ordering) — see
+``docs/qa/gnina-real-machine-2026-11-18.md`` for the measured evidence.
 """
 
 from __future__ import annotations
@@ -46,11 +47,15 @@ def _gnina_binary() -> str | None:
     found = shutil.which("gnina")
     if found:
         return found
-    server_root = Path(__file__).resolve().parents[1]
-    for name in ("linux-x86_64", "linux-aarch64"):
-        candidate = server_root / "resources" / "bin" / name / "gnina"
-        if candidate.is_file():
-            return str(candidate)
+    # resources/bin lives at the *repo* root, next to server/ (config.py resolves
+    # it the same way).  Looking only under server/ silently turned this whole
+    # module into a no-op skip whenever DOCKSTUDIO_GNINA was not exported.
+    test_file = Path(__file__).resolve()
+    for root in (test_file.parents[2], test_file.parents[1]):
+        for name in ("linux-x86_64", "linux-aarch64"):
+            candidate = root / "resources" / "bin" / name / "gnina"
+            if candidate.is_file():
+                return str(candidate)
     return None
 
 
@@ -225,10 +230,6 @@ def test_missing_ligand_raises_docking_error(gnina_engine, inputs, tmp_path: Pat
         )
 
 
-@pytest.mark.xfail(
-    strict=False,
-    reason="GN-04: gnina happily docks against an empty receptor and reports affinity 0.00",
-)
 def test_empty_receptor_is_rejected(gnina_engine, inputs, tmp_path: Path) -> None:
     from dockstudio.models import Box, DockingError, DockParams
 
@@ -262,11 +263,6 @@ def test_zero_size_box_raises_docking_error(gnina_engine, inputs, tmp_path: Path
     assert "搜索盒设置超限" not in msg, msg
 
 
-@pytest.mark.xfail(
-    strict=False,
-    reason="GN-08: dock() renames every ligand to ligand.pdbqt, so an exported "
-    "pose_1.sdf is parsed as PDBQT and gnina fails with 'Unknown or inappropriate tag'",
-)
 def test_in_place_rescore_accepts_an_exported_pose(gnina_engine, inputs, dock_run) -> None:
     """--score_only on the exported SDF — exactly what screen_runner Tier 2 does."""
     from dockstudio.analysis.export import export_poses
@@ -283,6 +279,9 @@ def test_in_place_rescore_accepts_an_exported_pose(gnina_engine, inputs, dock_ru
     )
     assert scored.poses, scored.log[-2000:]
     assert scored.poses[0].cnn_score is not None
+    assert scored.poses[0].cnn_affinity is not None
+    assert "GNINA_CNN_MISSING" not in scored.log
+    assert "--score_only" in scored.log
 
 
 # --------------------------------------------------------------------------

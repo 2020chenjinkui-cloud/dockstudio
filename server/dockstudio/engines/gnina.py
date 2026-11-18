@@ -14,9 +14,12 @@ from pathlib import Path
 from typing import Any
 
 from ..config import bundled_engine_binary
+from ..logging import get_logger
 from ..models import DockingError, EngineUnavailableError, Pose
-from .base import EngineManifest
+from .base import GNINA_CNN_MISSING, EngineManifest, marker
 from .vina import VinaEngine, _key_lines
+
+log = get_logger("engines.gnina")
 
 _AFF_RE = re.compile(r"^\s*REMARK\s+minimizedAffinity\s+(-?\d+(?:\.\d+)?)", re.IGNORECASE)
 _CNN_RE = re.compile(
@@ -122,6 +125,13 @@ def parse_gnina_out(out_path: Path, run_log: str) -> list[Pose]:
 
     if not poses:
         raise DockingError(f"gnina output contained no binding poses: {_key_lines(run_log)}")
+    if all(p.cnn_score is None and p.cnn_affinity is None for p in poses):
+        log.warning(
+            "gnina 输出中没有任何 CNNscore/CNNaffinity（%d 个 pose）：CNN 两列将为 None，"
+            "本次运行已标记为 %s，请在报告中按降级结果解读",
+            len(poses),
+            GNINA_CNN_MISSING,
+        )
     return poses
 
 
@@ -217,6 +227,64 @@ class GninaEngine(VinaEngine):
         if os.environ.get("DOCKSTUDIO_GNINA_CPU") == "1":
             cmd.append("--no_gpu")
         return cmd
+
+    # --------------------------------------------------- in-place rescoring
+
+    def _prepare_staged_ligand(self, staged: Path) -> Path:
+        """Make any staged ligand readable for gnina's in-place scoring modes.
+
+        Two real-machine findings drive this (GN-08):
+
+        * gnina dispatches its parser on the file extension, so an exported
+          ``pose_1.sdf`` used to die in the PDBQT reader as soon as
+          :meth:`VinaEngine.dock` renamed it to ``ligand.pdbqt``;
+        * a *multi-model* ``out.pdbqt`` from an earlier run is rejected at the
+          first ``ENDMDL`` (``Unknown or inappropriate tag``).
+
+        Non-PDBQT inputs are returned untouched (the extension now survives
+        staging). A PDBQT input is reduced to a single model without ``ENDMDL``:
+        ``--score_only`` / ``--minimize`` score exactly one supplied pose, and the
+        Tier-2 pose being refined is the top one, so picking MODEL 1 is the
+        deterministic choice (see docs/fixes/gnina-rescore-2026-11-18.md).
+        """
+        if staged.suffix.lower() != ".pdbqt":
+            return staged
+        text = staged.read_text(encoding="utf-8", errors="replace")
+        if "MODEL" not in text and "ENDMDL" not in text:
+            return staged  # plain single-pose PDBQT: nothing to normalise
+        kept: list[str] = []
+        models = 0
+        for line in text.splitlines():
+            token = line.split(maxsplit=1)[0].upper() if line.strip() else ""
+            if token == "MODEL":
+                models += 1
+                if models > 1:
+                    break
+                kept.append(line)
+                continue
+            if token == "ENDMDL":
+                continue
+            kept.append(line)
+        normalised = "\n".join(kept).rstrip("\n") + "\n"
+        if normalised != text:
+            staged.write_text(normalised, encoding="utf-8", newline="\n")
+            log.info(
+                "gnina ligand normalised: %d model(s) -> 1, ENDMDL stripped (%s)",
+                max(models, 1),
+                staged.name,
+            )
+        return staged
+
+    def _degradation_notes(self, poses: list[Pose]) -> list[str]:
+        """GN-03: a run without CNN values must say so instead of returning None."""
+        if poses and all(p.cnn_score is None and p.cnn_affinity is None for p in poses):
+            return [
+                marker(
+                    GNINA_CNN_MISSING,
+                    f"gnina {len(poses)} 个 pose 均无 CNNscore/CNNaffinity，CNN 列只能留空",
+                )
+            ]
+        return []
 
     def _parse_poses(self, out_path: Path, run_log: str) -> list[Pose]:
         return parse_gnina_out(out_path, run_log)

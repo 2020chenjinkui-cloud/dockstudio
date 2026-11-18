@@ -6,15 +6,101 @@ No frontend or API changes needed; capabilities are read from the manifest.
 
 from __future__ import annotations
 
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
 from pydantic import BaseModel, Field
 
 from ..logging import get_logger
-from ..models import Box, DockParams, DockResult
+from ..models import Box, DockingError, DockParams, DockResult
 
 log = get_logger("engines.base")
+
+# ---------------------------------------------------------------------------
+# Structured degradation markers
+# ---------------------------------------------------------------------------
+# The 2.0.5 audit found scientific signals being dropped *silently*: an
+# ``except Exception: pass`` around the GNINA CNN rescore, ``cnn_score`` turning
+# into ``None`` without a warning, and an empty receptor producing an
+# ``affinity == 0.0`` "pose" that read as success (docs/qa/gnina-real-machine-
+# 2026-11-18.md, GN-03/GN-04/GN-08).  Every such site now emits one of the
+# markers below.  They are plain strings on purpose: they travel through
+# existing channels (``ScreeningCandidateRow.alerts`` -> ``screening_results.csv``
+# "Alerts" column -> CLI table -> ``checkpoint.jsonl`` -> ``DockResult.log``)
+# without changing any persisted schema, so old checkpoints stay readable.
+
+#: In-place GNINA rescore could not be run (engine error, missing pose, ...).
+GNINA_RESCORE_UNAVAILABLE = "GNINA_RESCORE_UNAVAILABLE"
+#: GNINA ran, but the output carried no CNN score / CNN affinity.
+GNINA_CNN_MISSING = "GNINA_CNN_MISSING"
+
+#: Prefix used for the machine-greppable lines appended to ``DockResult.log``.
+DEGRADED_PREFIX = "DEGRADED"
+
+#: CSV/log cells are single-line; keep reasons short so a run stays readable.
+_MAX_DEGRADATION_REASON_CHARS = 240
+
+
+def marker(name: str, reason: str = "") -> str:
+    """Render ``NAME:one-line-reason`` (safe for a CSV cell and for grep)."""
+    text = " ".join(str(reason).split())
+    if len(text) > _MAX_DEGRADATION_REASON_CHARS:
+        text = text[: _MAX_DEGRADATION_REASON_CHARS - 1] + "\u2026"
+    return f"{name}:{text}" if text else f"{name}:unknown"
+
+
+def log_line(name: str, reason: str = "") -> str:
+    """Render a ``DEGRADED <NAME>:<reason>`` line for ``DockResult.log``."""
+    return f"{DEGRADED_PREFIX} {marker(name, reason)}"
+
+
+#: Ligand file suffixes every adapter may stage and hand to an engine verbatim.
+#: Engines dispatch their parser on the *extension*, so the staged copy must keep
+#: it: renaming an exported ``pose_1.sdf`` to ``ligand.pdbqt`` makes gnina's PDBQT
+#: reader choke on the SDF header (GN-08).
+SUPPORTED_LIGAND_SUFFIXES = (".pdbqt", ".sdf", ".mol2", ".pdb", ".mol")
+
+#: Records that make a receptor file usable. A receptor without any of them can
+#: only produce meaningless scores (GN-04).
+_RECEPTOR_ATOM_RECORDS = ("ATOM", "HETATM")
+
+
+@lru_cache(maxsize=64)
+def _count_receptor_atoms(path_str: str, mtime_ns: int, size: int) -> int:
+    """Count ATOM/HETATM records in a receptor file (memoised on stat identity)."""
+    del mtime_ns, size  # part of the cache key only
+    try:
+        text = Path(path_str).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return 0
+    return sum(1 for line in text.splitlines() if line.startswith(_RECEPTOR_ATOM_RECORDS))
+
+
+def validate_receptor_file(receptor_path: Path) -> int:
+    """Reject receptor inputs that cannot yield a meaningful score; return atom count.
+
+    A 0-byte (or atom-less) PDBQT makes gnina and vina *succeed* with
+    ``affinity == 0.0`` plus random CNN values, which downstream code cannot tell
+    apart from a real hit (GN-04, confirmed on a P4).  Both the generic adapters
+    and the HTVS runners call this before launching an engine, so the failure
+    surfaces as a readable Chinese ``DockingError`` instead of a pseudo pose.
+    """
+    try:
+        stat = receptor_path.stat()
+    except OSError as exc:
+        raise DockingError(
+            f"受体文件不存在或无法访问：{receptor_path}（{exc.strerror or exc}）"
+        ) from exc
+    if not receptor_path.is_file():
+        raise DockingError(f"受体路径不是文件：{receptor_path}")
+    atoms = _count_receptor_atoms(str(receptor_path.resolve()), stat.st_mtime_ns, stat.st_size)
+    if atoms == 0:
+        raise DockingError(
+            f"受体文件不含任何原子记录（ATOM/HETATM）：{receptor_path}（{stat.st_size} 字节）。"
+            "空受体无法用于对接，重新准备受体后再试。"
+        )
+    return atoms
 
 
 class EngineManifest(BaseModel):

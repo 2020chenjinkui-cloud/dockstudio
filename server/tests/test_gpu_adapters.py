@@ -160,7 +160,14 @@ def test_gnina_mock_binary_e2e(tmp_path: Path, monkeypatch) -> None:
         work = tmp_path / "run"
         rec = tmp_path / "rec.pdbqt"
         lig = tmp_path / "lig.pdbqt"
-        rec.write_text("x", encoding="utf-8")
+        # The receptor must look like a real PDBQT: atom-less input is now
+        # rejected by the adapter itself (GN-04), and this test is about the
+        # command/parse flow, not about input validation.
+        rec.write_text(
+            "ATOM      1  N   ILE A  10      13.000  22.000   5.000  1.00  0.00    -0.300 N\n"
+            "ATOM      2  CA  ILE A  10      14.000  22.500   5.200  1.00  0.00     0.100 C\n",
+            encoding="utf-8",
+        )
         lig.write_text("x", encoding="utf-8")
         result = eng.dock(
             rec,
