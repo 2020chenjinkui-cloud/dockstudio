@@ -40,6 +40,7 @@ from ..ui import (
 @dataclass
 class TestResult:
     """Represents the outcome of a single acceptance test."""
+
     test_id: str
     name: str
     passed: bool
@@ -53,6 +54,7 @@ class TestResult:
 @dataclass
 class ConfParams:
     """Parsed docking configuration from conf.txt."""
+
     center: tuple[float, float, float]
     size: tuple[float, float, float]
     exhaustiveness: int = 8
@@ -112,10 +114,11 @@ class DeliveryPackage:
             if p.is_dir() and p.name.lower() in ("poses", "docking"):
                 self.poses_dir = p
                 break
-        if not self.poses_dir:
-            # Fallback: check if root directly contains pose_*.sdf
-            if list(self.root.glob("pose_*.sdf")) or list(self.root.glob("*_pose*.sdf")):
-                self.poses_dir = self.root
+        # Fallback: root 直接放了 pose_*.sdf
+        if not self.poses_dir and (
+            list(self.root.glob("pose_*.sdf")) or list(self.root.glob("*_pose*.sdf"))
+        ):
+            self.poses_dir = self.root
 
     def cleanup(self) -> None:
         if self._temp_dir:
@@ -197,6 +200,7 @@ def load_energy_table(energy_path: Path) -> list[dict[str, Any]]:
                 rows.append(norm)
     elif energy_path.suffix.lower() == ".xlsx":
         import openpyxl
+
         wb = openpyxl.load_workbook(energy_path, data_only=True)
         ws = wb.active
         headers = [str(cell.value).strip().lower() for cell in ws[1] if cell.value is not None]
@@ -252,13 +256,15 @@ def load_energy_table(energy_path: Path) -> list[dict[str, Any]]:
         if str(inchikey).startswith("'"):
             inchikey = str(inchikey)[1:]
 
-        standardized.append({
-            "id": cid,
-            "affinity": score_val,
-            "smiles": smiles,
-            "inchikey": inchikey,
-            "raw": r,
-        })
+        standardized.append(
+            {
+                "id": cid,
+                "affinity": score_val,
+                "smiles": smiles,
+                "inchikey": inchikey,
+                "raw": r,
+            }
+        )
 
     standardized.sort(key=lambda x: x["affinity"])
     return standardized
@@ -357,7 +363,8 @@ def _find_pose_file(poses_dir: Path, cid: str, rank_idx: int) -> Path | None:
 
     # 2. Fuzzy match by compound ID with word boundaries / length sorting
     cands = [
-        f for f in poses_dir.iterdir()
+        f
+        for f in poses_dir.iterdir()
         if f.is_file() and cid in f.stem and f.suffix.lower() in (".sdf", ".mol", ".pdbqt", ".pdb")
     ]
     if cands:
@@ -385,6 +392,7 @@ def _mol_to_pdbqt_str(mol: Chem.Mol, fallback_text: str = "") -> str:
     """Converts an RDKit Mol to valid PDBQT string using meeko or robust conformer fallback."""
     try:
         from meeko import MoleculePreparation, PDBQTWriterLegacy
+
         mol_copy = Chem.Mol(mol)
         try:
             mol_copy.UpdatePropertyCache(strict=False)
@@ -421,6 +429,7 @@ def _mol_to_pdbqt_str(mol: Chem.Mol, fallback_text: str = "") -> str:
 # ---------------------------------------------------------------------------
 # T1~T5 Individual Verifiers
 # ---------------------------------------------------------------------------
+
 
 def _verify_t1(
     pkg: DeliveryPackage,
@@ -467,6 +476,7 @@ def _verify_t1(
     if engine is None and (options and options.get("recalculate")):
         try:
             from ...engines import get_engine
+
             vina_eng = get_engine("vina")
             ok, _ = vina_eng.is_available()
             if ok:
@@ -508,7 +518,11 @@ def _verify_t1(
         work_dir = Path(tempfile.mkdtemp(prefix="t1_recalc_"))
         try:
             lig_pdbqt = work_dir / "ligand.pdbqt"
-            raw_text = pose_file.read_text(encoding="utf-8", errors="replace") if pose_file.suffix.lower() == ".pdbqt" else ""
+            raw_text = (
+                pose_file.read_text(encoding="utf-8", errors="replace")
+                if pose_file.suffix.lower() == ".pdbqt"
+                else ""
+            )
             pdbqt_str = _mol_to_pdbqt_str(ref_mol, fallback_text=raw_text)
             if not pdbqt_str:
                 failures.append(f"{cid}: 无法生成合法配体 PDBQT")
@@ -537,7 +551,10 @@ def _verify_t1(
             elif (work_dir / "out.pdbqt").is_file():
                 try:
                     from meeko import PDBQTMolecule, RDKitMolCreate
-                    pdbqt_mol = PDBQTMolecule.from_file(str(work_dir / "out.pdbqt"), is_dlg=False, skip_typing=True)
+
+                    pdbqt_mol = PDBQTMolecule.from_file(
+                        str(work_dir / "out.pdbqt"), is_dlg=False, skip_typing=True
+                    )
                     mols = RDKitMolCreate.from_pdbqt_mol(pdbqt_mol)
                     if mols:
                         recalc_mol = mols[0]
@@ -545,7 +562,12 @@ def _verify_t1(
                     pass
 
             if recalc_mol is None:
-                if hasattr(res, "poses") and res.poses and hasattr(res.poses[0], "mol") and res.poses[0].mol is not None:
+                if (
+                    hasattr(res, "poses")
+                    and res.poses
+                    and hasattr(res.poses[0], "mol")
+                    and res.poses[0].mol is not None
+                ):
                     recalc_mol = res.poses[0].mol
                 elif (work_dir / "docked.sdf").is_file():
                     recalc_mol = _load_mol_safe(work_dir / "docked.sdf")
@@ -569,9 +591,11 @@ def _verify_t1(
         else:
             failures.append(f"{cid}: ΔAff={d_score:.3f}, RMSD={rmsd:.2f}Å")
 
-    passed = (passed_count == len(top10))
+    passed = passed_count == len(top10)
     status = "PASS" if passed else "FAIL"
-    observed = f"Δmax={max_d_score:.2f} kcal/mol, RMSD={max_rmsd:.2f}Å ({passed_count}/{len(top10)})"
+    observed = (
+        f"Δmax={max_d_score:.2f} kcal/mol, RMSD={max_rmsd:.2f}Å ({passed_count}/{len(top10)})"
+    )
     msg = "Top10 数值与空间构象 100% 完美复现" if passed else f"复算超差: {'; '.join(failures[:3])}"
 
     return TestResult(
@@ -599,6 +623,7 @@ def _verify_t2(
     if engine is None and (options and options.get("recalculate")):
         try:
             from dockstudio.engines import get_engine
+
             vina_eng = get_engine("vina")
             ok, _ = vina_eng.is_available()
             if ok:
@@ -636,7 +661,11 @@ def _verify_t2(
                 work_dir = Path(tempfile.mkdtemp(prefix="t2_recalc_"))
                 try:
                     lig_pdbqt = work_dir / "ligand.pdbqt"
-                    raw_text = pose_file.read_text(encoding="utf-8", errors="replace") if pose_file.suffix.lower() == ".pdbqt" else ""
+                    raw_text = (
+                        pose_file.read_text(encoding="utf-8", errors="replace")
+                        if pose_file.suffix.lower() == ".pdbqt"
+                        else ""
+                    )
                     pdbqt_str = _mol_to_pdbqt_str(ref_mol, fallback_text=raw_text)
                     if not pdbqt_str:
                         continue
@@ -698,7 +727,7 @@ def _verify_t2(
             stdevs.append(statistics.stdev(scores))
 
     max_std = max(stdevs) if stdevs else 0.0
-    passed = (overlap >= 0.70 and max_std <= 0.30)
+    passed = overlap >= 0.70 and max_std <= 0.30
     status = "PASS" if passed else "FAIL"
 
     return TestResult(
@@ -763,10 +792,9 @@ def _verify_t3(
             pose_ik = ""
 
         ref_ik = ref_item.get("inchikey")
-        if ref_ik and pose_ik:
-            # Check connectivity (first 14 chars) and stereochemistry (middle 10 chars)
-            if pose_ik[:25] != ref_ik[:25]:
-                mismatches.append(f"{cid}: InChIKey 不符 ({pose_ik[:14]} vs {ref_ik[:14]})")
+        # Check connectivity (first 14 chars) and stereochemistry (middle 10 chars)
+        if ref_ik and pose_ik and pose_ik[:25] != ref_ik[:25]:
+            mismatches.append(f"{cid}: InChIKey 不符 ({pose_ik[:14]} vs {ref_ik[:14]})")
 
         # Verify chiral preservation if reference smiles exists
         ref_smi = ref_item.get("smiles")
@@ -776,11 +804,17 @@ def _verify_t3(
                 ref_chiral = Chem.FindMolChiralCenters(ref_mol, includeUnassigned=True)
                 pose_chiral = Chem.FindMolChiralCenters(mol, includeUnassigned=True)
                 if len(ref_chiral) != len(pose_chiral):
-                    mismatches.append(f"{cid}: 手性中心数量变异 ({len(pose_chiral)} vs {len(ref_chiral)})")
+                    mismatches.append(
+                        f"{cid}: 手性中心数量变异 ({len(pose_chiral)} vs {len(ref_chiral)})"
+                    )
 
-    passed = (len(mismatches) == 0 and inspected > 0)
+    passed = len(mismatches) == 0 and inspected > 0
     status = "PASS" if passed else "FAIL"
-    obs = f"{inspected}/{inspected} 结构拓扑与手性中心 100% 吻合" if passed else f"{len(mismatches)} 处立体畸变"
+    obs = (
+        f"{inspected}/{inspected} 结构拓扑与手性中心 100% 吻合"
+        if passed
+        else f"{len(mismatches)} 处立体畸变"
+    )
 
     return TestResult(
         test_id="T3",
@@ -867,7 +901,7 @@ def _verify_t4(
             in_box_count += 1
 
     enclosure = (in_box_count / n_atoms) * 100.0
-    passed = (dist <= 2.0 and enclosure >= 100.0)
+    passed = dist <= 2.0 and enclosure >= 100.0
     status = "PASS" if passed else "FAIL"
 
     return TestResult(
@@ -931,12 +965,7 @@ def _verify_t5(
     n_docked_success = funnel.get("docked_success") or funnel.get("final_scored") or 0
 
     total_losses = (
-        n_desalt
-        + n_dedup
-        + n_chiral_failed
-        + n_prep_failed
-        + n_funnel_filtered
-        + n_dock_failed
+        n_desalt + n_dedup + n_chiral_failed + n_prep_failed + n_funnel_filtered + n_dock_failed
     )
     expected_docked = n_raw + n_aglycone - total_losses
     actual_rows = len(energy_rows)
@@ -945,7 +974,7 @@ def _verify_t5(
     disc_2 = abs(n_docked_success - actual_rows)
     total_disc = disc_1 + disc_2
 
-    passed = (total_disc == 0 and n_raw > 0)
+    passed = total_disc == 0 and n_raw > 0
     status = "PASS" if passed else "FAIL"
     obs = (
         f"Raw={n_raw}+苷元={n_aglycone}-损耗={total_losses}"
@@ -960,13 +989,16 @@ def _verify_t5(
         status=status,
         threshold="各阶段损耗严格闭合, 差值 == 0",
         observed=obs,
-        message="漏斗全链路无缝闭合，无黑盒丢失" if passed else f"漏斗数据不守恒 (残差: {total_disc})",
+        message="漏斗全链路无缝闭合，无黑盒丢失"
+        if passed
+        else f"漏斗数据不守恒 (残差: {total_disc})",
     )
 
 
 # ---------------------------------------------------------------------------
 # UI Presentation & Orchestrator
 # ---------------------------------------------------------------------------
+
 
 def render_verify_report(results: list[TestResult], pkg_root: Path) -> None:
     """Renders acceptance test results in Rich Table wrapped in make_pane."""

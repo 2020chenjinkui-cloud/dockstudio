@@ -21,7 +21,7 @@ def _ensure_ascii_rdkit_data() -> None:
         import importlib.util
 
         spec = importlib.util.find_spec("rdkit")
-    except Exception:  # noqa: BLE001
+    except Exception:  # 降级兜底
         return
     if spec is None or not spec.origin:
         return
@@ -81,7 +81,7 @@ def _optional_preload() -> None:
     ):
         try:
             importlib.import_module(mod)
-        except Exception:  # noqa: BLE001
+        except Exception:  # 降级兜底
             continue
 
 

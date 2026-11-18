@@ -15,9 +15,13 @@ from collections import defaultdict
 from collections.abc import Iterable
 from pathlib import Path
 
-from rdkit import Chem as _Chem  # noqa: F401
+# 导入顺序是刻意的：Linux 上 openbabel 的插件/符号解析与 rdkit 存在加载顺序约束，
+# 必须 rdkit 先加载；isort 若重排会破坏该约束，故用 isort: off 固定本段顺序。
+# isort: off
+from rdkit import Chem as _Chem
 from rdkit.Chem.MolStandardize import rdMolStandardize as _rdMolStandardize  # noqa: F401
-from openbabel import openbabel as ob  # isort: skip  # noqa: I001 - must load after rdkit on Linux
+from openbabel import openbabel as ob
+# isort: on
 
 from ..logging import get_logger
 from ..models import CocrystalLigand, PreparationError, PreparedReceptor
@@ -316,8 +320,7 @@ def prepare_receptor(content: bytes, filename: str, out_dir: Path) -> PreparedRe
 
     # Extract each candidate's conformation as SDF for the co-crystal reference;
     # the sidecar cocrystals.json keeps the mapping (model stays unchanged).
-    from rdkit import Chem as _Chem
-
+    # Chem 由模块顶部 isort: off 段导入（rdkit 必须先于 openbabel 加载），此处不要重复局部导入。
     cocrystal_meta: list[dict] = []
     for (resname, chain, _, _), group in sorted(het_groups.items()):
         if resname in _EXCLUDE:
@@ -337,7 +340,7 @@ def prepare_receptor(content: bytes, filename: str, out_dir: Path) -> PreparedRe
                 cocrystal_meta.append(
                     {"resname": resname, "chain": chain, "sdf_path": str(sdf_path)}
                 )
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:  # 降级兜底
             warnings.append(f"共晶配体 {resname}:{chain} SDF 抽取失败: {exc}")
             sdf_path.unlink(missing_ok=True)
     (rec_dir / "cocrystals.json").write_text(

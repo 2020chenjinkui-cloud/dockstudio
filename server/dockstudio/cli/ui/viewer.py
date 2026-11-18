@@ -71,13 +71,15 @@ def render_interaction_tree(
         items = groups.get(itype, [])
         if not items:
             continue
-        branch = root.add(f"[bold {color}]{label}[/bold {color}] ([#FFFFFF]{len(items)} 条[/#FFFFFF])")
+        branch = root.add(
+            f"[bold {color}]{label}[/bold {color}] ([#FFFFFF]{len(items)} 条[/#FFFFFF])"
+        )
         for contact in items:
             res = contact.get("residue", "Unknown")
             dist = contact.get("distance")
             dist_str = f"{dist:.2f} Å" if dist is not None else ""
             detail = contact.get("detail", "")
-            
+
             line = f"[{color}]•[/{color}] [bold #FFFFFF]{res:10s}[/bold #FFFFFF]"
             if dist_str:
                 line += f" 距离: [{color}]{dist_str}[/{color}]"

@@ -353,7 +353,7 @@ class RescoreRunner:
                 continue
             try:
                 self._run(task, job)
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:  # 降级兜底
                 if task.id in self._cancel_requested:
                     log.info("rescore task %s canceled", task.id)
                     task.status = JobStatus.canceled
@@ -439,7 +439,7 @@ class RescoreRunner:
             EventLog(self.store.root / job.project_id).emit(
                 action, "rescore", task.id, payload, actor="system"
             )
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:  # 降级兜底
             log.warning("rescore event emit failed (%s): %s", action, exc)
 
     def _write_inputs(self, job: Job, task_dir: Path) -> tuple[Path, str, str]:

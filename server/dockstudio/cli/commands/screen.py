@@ -12,15 +12,15 @@ Provides:
 
 from __future__ import annotations
 
-import csv
-import io
-import math
 import os
-import shutil
 import sys
 import time
 from pathlib import Path
-from typing import Any
+from types import TracebackType
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from typing_extensions import Self
 
 import click
 from prompt_toolkit import prompt
@@ -49,20 +49,17 @@ from ...engines import available_engines, get_engine
 from ...models import (
     Box,
     DockParams,
-    PreparedLibrary,
     ScreeningCandidateRow,
     ScreeningConfig,
-    ScreeningFunnelReport,
 )
 from ...prep.library import prepare_library
 from ...prep.receptor import prepare_receptor
+from ..ui import confirm as _ui_confirm
 from ..ui import (
     console,
-    format_affinity,
     make_header,
     make_pane,
 )
-from ..ui import confirm as _ui_confirm
 from ..ui import prompt_path as _ui_prompt_path
 from ..ui import select_one as _ui_select_one
 
@@ -78,6 +75,7 @@ CC(=O)Oc1ccccc1C(=O)O Aspirin
 # ---------------------------------------------------------------------------
 # Cross-Platform Safe Input Handlers (supporting both TTY and CliRunner)
 # ---------------------------------------------------------------------------
+
 
 def select_one(
     title: str,
@@ -202,6 +200,7 @@ def _select_docking_params(settings: Any) -> tuple[str, str, DockParams]:
 # Stepper & Header Visuals
 # ---------------------------------------------------------------------------
 
+
 def _render_screen_stepper(step: int, total_steps: int = 5, step_title: str = "") -> Any:
     """Renders a Claude Code style linear wizard stepper for /screen."""
     steps = [
@@ -258,6 +257,7 @@ def _resolve_demo_files() -> tuple[Path, Path]:
 # Live Progress Manager
 # ---------------------------------------------------------------------------
 
+
 class ScreenProgressManager:
     """Manages 3-tier cascade progress display for HTVS via rich.progress.Progress."""
 
@@ -279,19 +279,28 @@ class ScreenProgressManager:
         )
         self.tasks: dict[int, TaskID] = {}
 
-    def __enter__(self) -> ScreenProgressManager:
+    def __enter__(self) -> Self:
         if self.is_interactive:
             self.progress.start()
         return self
 
-    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> None:
         if self.is_interactive:
             self.progress.stop()
 
     def callback(self, event: ScreeningProgressEvent) -> None:
         """Callback invoked by ScreeningRunner._emit_progress."""
         if not self.is_interactive:
-            if event.current == 1 or event.current == event.total or event.current % max(1, event.total // 10) == 0:
+            if (
+                event.current == 1
+                or event.current == event.total
+                or event.current % max(1, event.total // 10) == 0
+            ):
                 pct = int(event.current * 100 // max(1, event.total))
                 self.console.print(
                     f"  [Tier {event.tier}] {event.stage_name}: {event.current}/{event.total} "
@@ -327,6 +336,7 @@ class ScreenProgressManager:
 # ---------------------------------------------------------------------------
 # Post-Screening Rich Summary Leaderboard
 # ---------------------------------------------------------------------------
+
 
 def render_screening_leaderboard(
     candidates: list[ScreeningCandidateRow],
@@ -464,6 +474,7 @@ def render_screening_leaderboard(
 # Coordinate & Option Helpers
 # ---------------------------------------------------------------------------
 
+
 def parse_box_coords(box_center_str: str | None, box_size_str: str) -> Box:
     """Parses center and size coordinates from CLI string flags."""
     if box_center_str:
@@ -497,7 +508,9 @@ def parse_box_coords(box_center_str: str | None, box_size_str: str) -> Box:
     return Box(center=(cx, cy, cz), size=(sx, sy, sz))
 
 
-def _resolve_receptor_files(receptor_path: Path, settings: Any) -> tuple[Path, Path | None, str, Any | None]:
+def _resolve_receptor_files(
+    receptor_path: Path, settings: Any
+) -> tuple[Path, Path | None, str, Any | None]:
     """Resolves receptor PDBQT and PDB files, calling prepare_receptor if necessary."""
     rec_out = settings.prepared_dir / "receptors"
     rec_out.mkdir(parents=True, exist_ok=True)
@@ -545,6 +558,7 @@ def _resolve_receptor_files(receptor_path: Path, settings: Any) -> tuple[Path, P
 # Interactive 5-Step Wizard Execution
 # ---------------------------------------------------------------------------
 
+
 def run_screen_interactive(demo: bool = False, **overrides: Any) -> int:
     """Runs the 5-step interactive HTVS wizard with Claude Code style panels."""
     settings = get_settings()
@@ -555,19 +569,25 @@ def run_screen_interactive(demo: bool = False, **overrides: Any) -> int:
         _refresh_screen_step(1, 5, "受体结构加载与结合口袋定盒")
 
         if demo:
-            demo_rec, demo_lib = _resolve_demo_files()
+            demo_rec, _ = _resolve_demo_files()
             rec_path = demo_rec
             rec_pdbqt, rec_pdb, rec_id, rec_obj = _resolve_receptor_files(rec_path, settings)
-            console.print(f"[bold #4EBA65]✓[/bold #4EBA65] 加载内置演示受体: 1HSG (HIV-1 蛋白酶催化二聚体)")
+            console.print(
+                "[bold #4EBA65]✓[/bold #4EBA65] 加载内置演示受体: 1HSG (HIV-1 蛋白酶催化二聚体)"
+            )
             dock_box = Box(center=(16.0, 25.0, 4.0), size=(22.5, 22.5, 22.5))
             console.print(
                 f"[bold #4EBA65]✓ 搜索盒已设定:[/bold #4EBA65] 中心 ({dock_box.center[0]:.1f}, {dock_box.center[1]:.1f}, {dock_box.center[2]:.1f}) · 尺寸 {dock_box.size[0]:.1f}Å"
             )
         else:
-            rec_mode = select_one("选择受体来源:", [
-                ("指定受体文件路径 (PDB / mmCIF / PDBQT)", "从本地文件系统加载"),
-                ("使用内置演示受体: 1HSG", "HIV-1 蛋白酶催化二聚体"),
-            ], default=0)
+            rec_mode = select_one(
+                "选择受体来源:",
+                [
+                    ("指定受体文件路径 (PDB / mmCIF / PDBQT)", "从本地文件系统加载"),
+                    ("使用内置演示受体: 1HSG", "HIV-1 蛋白酶催化二聚体"),
+                ],
+                default=0,
+            )
 
             if rec_mode == 0:
                 rec_path = prompt_path("请指定受体结构文件路径")
@@ -600,7 +620,10 @@ def run_screen_interactive(demo: bool = False, **overrides: Any) -> int:
                     pockets = detect_pockets(rec_pdb or rec_pdbqt, top_n=3)
                 if pockets:
                     p_choices = [
-                        (f"口袋 #{p.id} (评分: {p.score:.1f})", f"中心: ({p.center[0]:.1f}, {p.center[1]:.1f}, {p.center[2]:.1f}) · 尺寸: ({p.size[0]:.1f}, {p.size[1]:.1f}, {p.size[2]:.1f})")
+                        (
+                            f"口袋 #{p.id} (评分: {p.score:.1f})",
+                            f"中心: ({p.center[0]:.1f}, {p.center[1]:.1f}, {p.center[2]:.1f}) · 尺寸: ({p.size[0]:.1f}, {p.size[1]:.1f}, {p.size[2]:.1f})",
+                        )
                         for p in pockets
                     ]
                     p_idx = select_one("选择预测口袋:", p_choices, default=0)
@@ -638,7 +661,9 @@ def run_screen_interactive(demo: bool = False, **overrides: Any) -> int:
             lib_bytes = _DEMO_LIBRARY_SMI.encode("utf-8")
             lib_name = "demo_library.smi"
             tcm_mode = True
-            console.print("[bold #4EBA65]✓[/bold #4EBA65] 加载内置中药单体及药物库 (黄芩苷、槲皮素、姜黄素、布洛芬、阿司匹林)")
+            console.print(
+                "[bold #4EBA65]✓[/bold #4EBA65] 加载内置中药单体及药物库 (黄芩苷、槲皮素、姜黄素、布洛芬、阿司匹林)"
+            )
         else:
             lib_choices = [
                 ("指定化合物库文件路径 (SMILES / SDF / CSV)", "从本地文件系统加载化合物库"),
@@ -654,15 +679,28 @@ def run_screen_interactive(demo: bool = False, **overrides: Any) -> int:
                 lib_name = "demo_library.smi"
 
             tcm_info = Text()
-            tcm_info.append("💡 中药单体双轨比对机制 (TCM Dual-Track Screening):\n", style="bold #93A5FF")
-            tcm_info.append("• 糖苷假阳性消除: 自动水解可切断糖苷键衍生苷元，解决原形糖链非特异氢键假阳性。\n", style="#CCCCCC")
-            tcm_info.append("• 双轨同屏比对: 原形糖苷与衍生苷元同时进入筛选池，排行榜同屏对比活性。\n", style="#CCCCCC")
-            tcm_info.append("• 碳苷精密保护: 葛根素、牡荆素等 C-C 键糖苷结构得到精确保护不断裂。", style="#CCCCCC")
+            tcm_info.append(
+                "💡 中药单体双轨比对机制 (TCM Dual-Track Screening):\n", style="bold #93A5FF"
+            )
+            tcm_info.append(
+                "• 糖苷假阳性消除: 自动水解可切断糖苷键衍生苷元，解决原形糖链非特异氢键假阳性。\n",
+                style="#CCCCCC",
+            )
+            tcm_info.append(
+                "• 双轨同屏比对: 原形糖苷与衍生苷元同时进入筛选池，排行榜同屏对比活性。\n",
+                style="#CCCCCC",
+            )
+            tcm_info.append(
+                "• 碳苷精密保护: 葛根素、牡荆素等 C-C 键糖苷结构得到精确保护不断裂。",
+                style="#CCCCCC",
+            )
             console.print(make_pane("中药单体预处理特性", tcm_info))
 
             tcm_mode = confirm("是否启用中药单体双轨模式 (自动水解衍生苷元同屏比对)?", default=True)
 
-        with console.status("[bold #93A5FF]正在解析分子库、执行脱盐水解与 PDBQT 准备...[/bold #93A5FF]"):
+        with console.status(
+            "[bold #93A5FF]正在解析分子库、执行脱盐水解与 PDBQT 准备...[/bold #93A5FF]"
+        ):
             prepared_lib = prepare_library(
                 content=lib_bytes,
                 filename=lib_name,
@@ -690,9 +728,15 @@ def run_screen_interactive(demo: bool = False, **overrides: Any) -> int:
             anchor_mode = select_one("选择锚定残基设定方式:", anchor_choices, default=0)
             parsed_anchors = []
             if anchor_mode == 1:
-                raw_anchors = _prompt_text("请输入锚定残基代码 (逗号分隔，如 ASP25:A,THR80:A)", default="ASP25:A,THR80:A")
-                parsed_anchors = [a.strip().upper() for a in raw_anchors.replace(";", ",").split(",") if a.strip()]
-                console.print(f"[bold #4EBA65]✓ 药效团锚定残基:[/bold #4EBA65] {', '.join(parsed_anchors)}")
+                raw_anchors = _prompt_text(
+                    "请输入锚定残基代码 (逗号分隔，如 ASP25:A,THR80:A)", default="ASP25:A,THR80:A"
+                )
+                parsed_anchors = [
+                    a.strip().upper() for a in raw_anchors.replace(";", ",").split(",") if a.strip()
+                ]
+                console.print(
+                    f"[bold #4EBA65]✓ 药效团锚定残基:[/bold #4EBA65] {', '.join(parsed_anchors)}"
+                )
             else:
                 console.print("[dim]未设定锚定残基，执行全口袋自由对接[/dim]")
 
@@ -700,25 +744,37 @@ def run_screen_interactive(demo: bool = False, **overrides: Any) -> int:
         _refresh_screen_step(4, 5, "三级级联漏斗参数与严谨性打分配置")
 
         custom_engine = "vina"
-        custom_scoring = "vina"
         custom_params = None
         try:
-            custom_engine, custom_scoring, custom_params = _select_docking_params(settings)
+            custom_engine, _, custom_params = _select_docking_params(settings)
         except Exception:
             pass
 
         if demo:
             tier1_ratio = overrides.get("tier1_ratio", 0.5)
             tier2_ratio = overrides.get("tier2_ratio", 0.5)
-            parsed_seeds = [custom_params.seed] if (custom_params and custom_params.seed is not None) else [42]
+            parsed_seeds = (
+                [custom_params.seed] if (custom_params and custom_params.seed is not None) else [42]
+            )
             strain_threshold = overrides.get("strain_threshold", 8.0)
             enable_gnina = False
-            console.print("[bold #4EBA65]✓ 演示模式漏斗:[/bold #4EBA65] Tier1 50% -> Tier2 单种子 -> 快速完成")
+            console.print(
+                "[bold #4EBA65]✓ 演示模式漏斗:[/bold #4EBA65] Tier1 50% -> Tier2 单种子 -> 快速完成"
+            )
         else:
             preset_choices = [
-                ("标准三级漏斗 (推荐)", "Tier1 15% SILE -> Tier2 3-Seed 收敛性/张力能 (2%) -> Tier3 GNINA/ECR 聚类"),
-                ("极速高通量模式 (Fast)", "Tier1 10% -> Tier2 2-Seed (1%) -> Tier3 ECR (跳过 GNINA 重打分)"),
-                ("严谨药物发现模式 (Strict)", "Tier1 20% -> Tier2 3-Seed (5%, 张力能 <= 6.0) -> Tier3 GNINA/ECR"),
+                (
+                    "标准三级漏斗 (推荐)",
+                    "Tier1 15% SILE -> Tier2 3-Seed 收敛性/张力能 (2%) -> Tier3 GNINA/ECR 聚类",
+                ),
+                (
+                    "极速高通量模式 (Fast)",
+                    "Tier1 10% -> Tier2 2-Seed (1%) -> Tier3 ECR (跳过 GNINA 重打分)",
+                ),
+                (
+                    "严谨药物发现模式 (Strict)",
+                    "Tier1 20% -> Tier2 3-Seed (5%, 张力能 <= 6.0) -> Tier3 GNINA/ECR",
+                ),
                 ("自定义高级参数 (Custom)", "手动指定各级漏斗晋级比例、随机种子数与张力能阈值"),
             ]
             preset_idx = select_one("选择漏斗配置方案:", preset_choices, default=0)
@@ -747,7 +803,11 @@ def run_screen_interactive(demo: bool = False, **overrides: Any) -> int:
                 t2_str = _prompt_text("Tier 2 精筛晋级比例 (0.001~0.5)", default="0.02")
                 tier2_ratio = float(t2_str) if t2_str else 0.02
                 seeds_str = _prompt_text("Tier 2 随机种子列表 (逗号分隔)", default="42,1024,2026")
-                parsed_seeds = [int(s.strip()) for s in seeds_str.split(",") if s.strip()] or [42, 1024, 2026]
+                parsed_seeds = [int(s.strip()) for s in seeds_str.split(",") if s.strip()] or [
+                    42,
+                    1024,
+                    2026,
+                ]
                 strain_str = _prompt_text("配体张力能上限 (kcal/mol)", default="8.0")
                 strain_threshold = float(strain_str) if strain_str else 8.0
                 enable_gnina = confirm("Tier 3 是否启用 GNINA CNN 正交重打分?", default=True)
@@ -758,16 +818,27 @@ def run_screen_interactive(demo: bool = False, **overrides: Any) -> int:
         if demo:
             engine_name = custom_engine if custom_engine else "vina"
             resolved_engine = _resolve_engine(engine_name)
-            out_dir = overrides.get("out") or (settings.data_dir / "screens" / f"screen_demo_{int(time.time())}")
+            out_dir = overrides.get("out") or (
+                settings.data_dir / "screens" / f"screen_demo_{int(time.time())}"
+            )
             out_dir = Path(out_dir).expanduser().resolve()
             out_dir.mkdir(parents=True, exist_ok=True)
             resume = False
-            total_cpus = overrides.get("cpu") or (custom_params.cpu if custom_params and custom_params.cpu else 2)
-            cpu_per_job = overrides.get("cpu_per_job") or (custom_params.cpu if custom_params and custom_params.cpu else 2)
-            console.print(f"[bold #4EBA65]✓ 演示模式引擎:[/bold #4EBA65] {resolved_engine.manifest.name} (CPU {total_cpus}) -> 立即启动")
+            total_cpus = overrides.get("cpu") or (
+                custom_params.cpu if custom_params and custom_params.cpu else 2
+            )
+            cpu_per_job = overrides.get("cpu_per_job") or (
+                custom_params.cpu if custom_params and custom_params.cpu else 2
+            )
+            console.print(
+                f"[bold #4EBA65]✓ 演示模式引擎:[/bold #4EBA65] {resolved_engine.manifest.name} (CPU {total_cpus}) -> 立即启动"
+            )
         else:
             eng_choices = [
-                ("自动推荐 (Auto: GPU 可用首选 Uni-Dock，否则 Vina)", "根据系统硬件自适应选择最高吞吐后端"),
+                (
+                    "自动推荐 (Auto: GPU 可用首选 Uni-Dock，否则 Vina)",
+                    "根据系统硬件自适应选择最高吞吐后端",
+                ),
                 ("Vina (CPU 多进程)", "跨平台通用标准对接引擎"),
                 ("Uni-Dock (GPU 批处理加速)", "NVIDIA CUDA 批量高通量加速"),
                 ("GNINA (深度学习打分)", "含 CNN 打分模型的高精度引擎"),
@@ -785,24 +856,44 @@ def run_screen_interactive(demo: bool = False, **overrides: Any) -> int:
 
             resolved_engine = _resolve_engine(engine_name)
 
-            out_dir = overrides.get("out") or (settings.data_dir / "screens" / f"screen_{int(time.time())}")
+            out_dir = overrides.get("out") or (
+                settings.data_dir / "screens" / f"screen_{int(time.time())}"
+            )
             out_dir = Path(out_dir).expanduser().resolve()
             out_dir.mkdir(parents=True, exist_ok=True)
 
             ckpt_file = out_dir / "checkpoint.jsonl"
             resume = False
             if ckpt_file.is_file() and ckpt_file.stat().st_size > 0:
-                resume = confirm("检测到已有断点文件 checkpoint.jsonl，是否从断点继续筛选 (跳过已完成分子)?", default=True)
+                resume = confirm(
+                    "检测到已有断点文件 checkpoint.jsonl，是否从断点继续筛选 (跳过已完成分子)?",
+                    default=True,
+                )
 
             total_cpus = overrides.get("cpu") or max(2, min(os.cpu_count() or 4, 16))
             cpu_per_job = overrides.get("cpu_per_job") or 2
 
             preflight = Text()
-            preflight.append(f"• 受体结构: {rec_id} · 搜索盒中心 ({dock_box.center[0]:.1f}, {dock_box.center[1]:.1f}, {dock_box.center[2]:.1f}) · 尺寸 {dock_box.size[0]:.1f}Å\n", style="#CCCCCC")
-            preflight.append(f"• 配体分子: {prepared_lib.name} · 就绪分子 {n_ready} 个 (中药双态: {tcm_mode})\n", style="#CCCCCC")
-            preflight.append(f"• 药效锚定: {', '.join(parsed_anchors) if parsed_anchors else '全口袋自由结合'}\n", style="#CCCCCC")
-            preflight.append(f"• 漏斗配置: Tier1 留存 {int(tier1_ratio*100)}% -> Tier2 留存 {int(tier2_ratio*100)}% (Seeds: {parsed_seeds}, 张力能 <= {strain_threshold} kcal/mol)\n", style="#CCCCCC")
-            preflight.append(f"• 计算后端: 引擎 {resolved_engine.manifest.name} · 总 CPU {total_cpus} (每任务 {cpu_per_job} 线程)\n", style="#CCCCCC")
+            preflight.append(
+                f"• 受体结构: {rec_id} · 搜索盒中心 ({dock_box.center[0]:.1f}, {dock_box.center[1]:.1f}, {dock_box.center[2]:.1f}) · 尺寸 {dock_box.size[0]:.1f}Å\n",
+                style="#CCCCCC",
+            )
+            preflight.append(
+                f"• 配体分子: {prepared_lib.name} · 就绪分子 {n_ready} 个 (中药双态: {tcm_mode})\n",
+                style="#CCCCCC",
+            )
+            preflight.append(
+                f"• 药效锚定: {', '.join(parsed_anchors) if parsed_anchors else '全口袋自由结合'}\n",
+                style="#CCCCCC",
+            )
+            preflight.append(
+                f"• 漏斗配置: Tier1 留存 {int(tier1_ratio * 100)}% -> Tier2 留存 {int(tier2_ratio * 100)}% (Seeds: {parsed_seeds}, 张力能 <= {strain_threshold} kcal/mol)\n",
+                style="#CCCCCC",
+            )
+            preflight.append(
+                f"• 计算后端: 引擎 {resolved_engine.manifest.name} · 总 CPU {total_cpus} (每任务 {cpu_per_job} 线程)\n",
+                style="#CCCCCC",
+            )
             preflight.append(f"• 交付路径: {out_dir} (断点续筛: {resume})", style="#CCCCCC")
             console.print(make_pane("筛选启动预检确认 (Pre-flight Summary)", preflight))
 
@@ -831,9 +922,7 @@ def run_screen_interactive(demo: bool = False, **overrides: Any) -> int:
         )
 
         lib_ligands = {
-            lid: registry.ligands[lid]
-            for lid in prepared_lib.ligand_ids
-            if lid in registry.ligands
+            lid: registry.ligands[lid] for lid in prepared_lib.ligand_ids if lid in registry.ligands
         }
 
         with ScreenProgressManager(console, is_interactive=True) as progress_mgr:
@@ -861,8 +950,12 @@ def run_screen_interactive(demo: bool = False, **overrides: Any) -> int:
         )
         console.print(leaderboard_panel)
 
-        console.print(f"\n[bold #4EBA65]✓ 高通量筛选全部完成![/bold #4EBA65] 产出交付包目录: {out_dir}")
-        console.print("[dim]交付文件: funnel.csv · screening_results.csv · conf.txt · receptor.pdbqt · poses/[/dim]\n")
+        console.print(
+            f"\n[bold #4EBA65]✓ 高通量筛选全部完成![/bold #4EBA65] 产出交付包目录: {out_dir}"
+        )
+        console.print(
+            "[dim]交付文件: funnel.csv · screening_results.csv · conf.txt · receptor.pdbqt · poses/[/dim]\n"
+        )
         return 0
 
     except (KeyboardInterrupt, EOFError):
@@ -873,6 +966,7 @@ def run_screen_interactive(demo: bool = False, **overrides: Any) -> int:
 # ---------------------------------------------------------------------------
 # Headless / Non-Interactive Execution
 # ---------------------------------------------------------------------------
+
 
 def _resolve_engine(engine_name: str) -> Any:
     """Resolves engine instance, with auto-fallback to unidock GPU or vina."""
@@ -958,7 +1052,9 @@ def run_screen_headless(
         return 1
 
     parsed_seeds = [int(s.strip()) for s in seeds_str.split(",") if s.strip()] or [42, 1024, 2026]
-    parsed_anchors = [a.strip().upper() for a in anchor_residues_str.replace(";", ",").split(",") if a.strip()]
+    parsed_anchors = [
+        a.strip().upper() for a in anchor_residues_str.replace(";", ",").split(",") if a.strip()
+    ]
 
     resolved_engine = _resolve_engine(engine_name)
     total_cpu = cpu or max(2, min(os.cpu_count() or 4, 16))
@@ -986,9 +1082,7 @@ def run_screen_headless(
     )
 
     lib_ligands = {
-        lid: registry.ligands[lid]
-        for lid in prepared_lib.ligand_ids
-        if lid in registry.ligands
+        lid: registry.ligands[lid] for lid in prepared_lib.ligand_ids if lid in registry.ligands
     }
 
     with ScreenProgressManager(console, is_interactive=False) as progress_mgr:
@@ -1022,15 +1116,18 @@ def run_screen_headless(
 # Click CLI Entrypoint
 # ---------------------------------------------------------------------------
 
+
 @click.command(name="screen", help="高通量虚拟筛选 (HTVS) 三级漏斗调度引擎")
 @click.option(
-    "--receptor", "-r",
+    "--receptor",
+    "-r",
     type=click.Path(path_type=Path),
     default=None,
     help="受体蛋白结构文件路径 (PDB / mmCIF / PDBQT)",
 )
 @click.option(
-    "--library", "-l",
+    "--library",
+    "-l",
     type=click.Path(path_type=Path),
     default=None,
     help="待筛选小分子化合物库文件 (SMILES / SDF / CSV)",
@@ -1087,14 +1184,16 @@ def run_screen_headless(
     help="配体内部构象张力能惩罚上限 (kcal/mol)",
 )
 @click.option(
-    "--engine", "-e",
+    "--engine",
+    "-e",
     type=str,
     default="auto",
     show_default=True,
     help="对接计算引擎 (auto: GPU 可用时自动首选 unidock，否则 vina)",
 )
 @click.option(
-    "--cpu", "-c",
+    "--cpu",
+    "-c",
     type=click.IntRange(min=1),
     default=None,
     help="分配的总 CPU 逻辑核心数 (默认自动探测系统最大核心)",
@@ -1112,7 +1211,8 @@ def run_screen_headless(
     help="是否从断点文件 checkpoint.jsonl 恢复筛选 (默认自动检测是否存在)",
 )
 @click.option(
-    "--out", "-o",
+    "--out",
+    "-o",
     type=click.Path(path_type=Path),
     default=None,
     help="筛选产出与交付包目录 (默认在 data_dir/screens/screen_<timestamp>)",
@@ -1124,7 +1224,8 @@ def run_screen_headless(
     help="Tier 3 中是否启用 GNINA CNN 正交重打分 (需 GNINA 可用)",
 )
 @click.option(
-    "--demo", "-d",
+    "--demo",
+    "-d",
     is_flag=True,
     default=False,
     help="使用内置 1HSG 蛋白酶与上市药物库运行端到端演示",

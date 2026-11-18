@@ -54,7 +54,7 @@ class EventBus:
         for listener in listeners:
             try:
                 listener(job_id, event)
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:  # 降级兜底
                 log.warning("event listener failed for job %s: %s", job_id, exc)
 
 
@@ -112,7 +112,7 @@ class JobRunner:
                 return job
             try:
                 engine.cancel_current()  # type: ignore[attr-defined]
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:  # 降级兜底
                 log.warning("engine cancel_current failed: %s", exc)
             return job
         return job
@@ -152,7 +152,7 @@ class JobRunner:
                     self._emit_finished(job)
                     continue
                 await self._run(job)
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:  # 降级兜底
                 log.error("job %s crashed the worker path: %s", job_id, exc)
                 if job is not None and not job.is_terminal:
                     job.status = JobStatus.failed
@@ -169,7 +169,7 @@ class JobRunner:
         if self.event_emitter is not None:
             try:
                 self.event_emitter(job, action, payload)
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:  # 降级兜底
                 log.warning("event emitter failed for %s on job %s: %s", action, job.id, exc)
 
     async def _run(self, job: Job) -> None:

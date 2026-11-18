@@ -14,7 +14,7 @@ from rdkit import Chem
 
 from ..core.orchestrator import PrepareRegistry
 from ..logging import get_logger
-from ..models import PreparationError, PreparedLigand, PreparedLibrary
+from ..models import PreparationError, PreparedLibrary, PreparedLigand
 from .ligand import _write_ligand
 from .tcm import (
     deglycosylate_tcm_mol,
@@ -73,9 +73,8 @@ def _unassigned_centers_confined_to_aliphatic_ring(mol: Chem.Mol) -> bool:
             bond = mol.GetBondBetweenAtoms(ring[i], ring[(i + 1) % len(ring)])
             if bond is None or ring_info.NumBondRings(bond.GetIdx()) > 1:
                 return False  # fused / bridged
-        if any(ring_membership.get(i, 0) > 1 for i in ring):
-            return False  # spiro / bridgehead
-        return True
+        # spiro / bridgehead
+        return not any(ring_membership.get(i, 0) > 1 for i in ring)
 
     for atom_idx in unassigned:
         host_rings = [r for r in atom_rings if atom_idx in r]
@@ -214,11 +213,13 @@ def prepare_library(
 
         if mol is None:
             n_desalt_fail += 1
-            failed.append({
-                "index": index,
-                "smiles": payload[:120],
-                "reason": "RDKit 无法解析分子结构",
-            })
+            failed.append(
+                {
+                    "index": index,
+                    "smiles": payload[:120],
+                    "reason": "RDKit 无法解析分子结构",
+                }
+            )
             log.warning("library entry %d failed: unparseable structure", index)
             continue
 
@@ -226,11 +227,13 @@ def prepare_library(
         clean_mol, desalt_reason = desalt_and_filter(mol, min_heavy=min_heavy, max_heavy=max_heavy)
         if clean_mol is None:
             n_desalt_fail += 1
-            failed.append({
-                "index": index,
-                "smiles": payload[:120],
-                "reason": desalt_reason or "脱盐或元素/尺寸过滤失败",
-            })
+            failed.append(
+                {
+                    "index": index,
+                    "smiles": payload[:120],
+                    "reason": desalt_reason or "脱盐或元素/尺寸过滤失败",
+                }
+            )
             log.warning("library entry %d failed desalt/filter: %s", index, desalt_reason)
             continue
 
@@ -266,17 +269,17 @@ def prepare_library(
         )
         if not chiral_ok and not _unassigned_centers_confined_to_aliphatic_ring(clean_mol):
             n_chiral_fail += 1
-            failed.append({
-                "index": index,
-                "smiles": payload[:120],
-                "reason": (
-                    f"未定义手性中心超过 {MAX_UNSPECIFIED_STEREO_CENTERS} 个，"
-                    "立体化学歧义过大已拦截"
-                ),
-            })
-            log.warning(
-                "library entry %d rejected: too many undefined stereocentres", index
+            failed.append(
+                {
+                    "index": index,
+                    "smiles": payload[:120],
+                    "reason": (
+                        f"未定义手性中心超过 {MAX_UNSPECIFIED_STEREO_CENTERS} 个，"
+                        "立体化学歧义过大已拦截"
+                    ),
+                }
             )
+            log.warning("library entry %d rejected: too many undefined stereocentres", index)
             continue
         if isomers:
             clean_mol = isomers[0]
@@ -321,11 +324,13 @@ def prepare_library(
             n_ready += 1
         except Exception as exc:
             n_prep_fail += 1
-            failed.append({
-                "index": index,
-                "smiles": payload[:120],
-                "reason": f"3D嵌入或PDBQT生成失败: {exc}",
-            })
+            failed.append(
+                {
+                    "index": index,
+                    "smiles": payload[:120],
+                    "reason": f"3D嵌入或PDBQT生成失败: {exc}",
+                }
+            )
             log.warning("library entry %d prep failed: %s", index, exc)
             continue
 

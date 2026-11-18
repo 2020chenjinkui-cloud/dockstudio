@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-import os
 from typing import Literal
 
 from rdkit import Chem
-from rdkit.Chem import AllChem, Descriptors, QED
+from rdkit.Chem import QED, AllChem, Descriptors
 from rdkit.Chem.EnumerateStereoisomers import EnumerateStereoisomers, StereoEnumerationOptions
 from rdkit.Chem.FilterCatalog import FilterCatalog, FilterCatalogParams
 from rdkit.Chem.MolStandardize import rdMolStandardize
@@ -14,9 +13,11 @@ from rdkit.Chem.Scaffolds import MurckoScaffold
 
 try:
     from ..logging import get_logger
+
     log = get_logger("prep.tcm")
 except Exception:
     import logging
+
     log = logging.getLogger("prep.tcm")
 
 try:
@@ -26,6 +27,7 @@ except ImportError:
 
     class LigandQCProfile(BaseModel):  # type: ignore[no-redef]
         """配体理化性质、天然产物特征与假阳性警示画像。"""
+
         heavy_atoms: int = Field(default=0, ge=0, description="重原子数")
         mw: float = Field(default=0.0, ge=0.0, description="分子量 (Da)")
         clogp: float = Field(default=0.0, description="计算脂水分配系数 cLogP")
@@ -38,19 +40,27 @@ except ImportError:
         inchikey: str = Field(default="", description="标准化 InChIKey")
         murcko_scaffold: str = Field(default="", description="Bemis-Murcko 骨架 SMILES")
         is_glycoside: bool = Field(default=False, description="是否为糖苷类化合物")
-        parent_glycoside_id: str | None = Field(default=None, description="衍生苷元对应的原形糖苷 ID")
+        parent_glycoside_id: str | None = Field(
+            default=None, description="衍生苷元对应的原形糖苷 ID"
+        )
         derivative_type: Literal["original", "aglycone", "stereoisomer"] = Field(
             default="original", description="分子形态类型"
         )
-        min_energy_kcal: float | None = Field(default=None, description="自由态 MMFF94s 全局最低能量基准 (kcal/mol)")
+        min_energy_kcal: float | None = Field(
+            default=None, description="自由态 MMFF94s 全局最低能量基准 (kcal/mol)"
+        )
         pains_alerts: list[str] = Field(default_factory=list, description="PAINS 结构警示列表")
-        pains_names: list[str] = Field(default_factory=list, description="PAINS 结构警示列表 (别名)")
+        pains_names: list[str] = Field(
+            default_factory=list, description="PAINS 结构警示列表 (别名)"
+        )
         brenk_names: list[str] = Field(default_factory=list, description="Brenk 结构警示列表")
         tcm_warnings: list[str] = Field(
             default_factory=list,
-            description="中药专属假阳性警示标签，如 Catechol_Polyphenol, Quinone_Redox, Michael_Acceptor, Tannin_Polyphenol"
+            description="中药专属假阳性警示标签，如 Catechol_Polyphenol, Quinone_Redox, Michael_Acceptor, Tannin_Polyphenol",
         )
-        tcm_alerts: list[str] = Field(default_factory=list, description="中药专属假阳性警示标签 (别名)")
+        tcm_alerts: list[str] = Field(
+            default_factory=list, description="中药专属假阳性警示标签 (别名)"
+        )
 
 
 ALLOWED_ORGANIC_ELEMENTS = frozenset(
@@ -74,41 +84,53 @@ _ACID_COUNTERION_SOURCE: tuple[str, ...] = (
     "O=[N+]([O-])O",
     "O=C(O)O",
     # aliphatic / aromatic organic acids
-    "CC(=O)O",                     # acetic
-    "O=C(O)C(F)(F)F",              # trifluoroacetic
-    "CS(=O)(=O)O",                 # methanesulfonic (mesylate)
-    "CCS(=O)(=O)O",                # ethanesulfonic (esylate)
-    "O=S(=O)(O)c1ccccc1",          # benzenesulfonic (besylate)
-    "Cc1ccc(S(=O)(=O)O)cc1",       # p-toluenesulfonic (tosylate)
-    "O=C(O)C(=O)O",                # oxalic
-    "O=C(O)CC(=O)O",               # malonic
-    "O=C(O)CCC(=O)O",              # succinic
-    "O=C(O)C=CC(=O)O",             # maleic / fumaric
-    "O=C(O)CC(O)C(=O)O",           # malic
-    "O=C(O)C(O)C(O)C(=O)O",        # tartaric
+    "CC(=O)O",  # acetic
+    "O=C(O)C(F)(F)F",  # trifluoroacetic
+    "CS(=O)(=O)O",  # methanesulfonic (mesylate)
+    "CCS(=O)(=O)O",  # ethanesulfonic (esylate)
+    "O=S(=O)(O)c1ccccc1",  # benzenesulfonic (besylate)
+    "Cc1ccc(S(=O)(=O)O)cc1",  # p-toluenesulfonic (tosylate)
+    "O=C(O)C(=O)O",  # oxalic
+    "O=C(O)CC(=O)O",  # malonic
+    "O=C(O)CCC(=O)O",  # succinic
+    "O=C(O)C=CC(=O)O",  # maleic / fumaric
+    "O=C(O)CC(O)C(=O)O",  # malic
+    "O=C(O)C(O)C(O)C(=O)O",  # tartaric
     "O=C(O)CC(O)(CC(=O)O)C(=O)O",  # citric
-    "CC(O)C(=O)O",                 # lactic
-    "O=C(O)C(O)C(O)C(O)C(O)CO",    # gluconic
+    "CC(O)C(=O)O",  # lactic
+    "O=C(O)C(O)C(O)C(O)C(O)CO",  # gluconic
 )
 
 #: Crystallization solvents frequently found as solvates / hydrates.
 _SOLVENT_SOURCE: tuple[str, ...] = (
-    "O",           # water
-    "CO",          # methanol
-    "CCO",         # ethanol
-    "CC(C)O",      # isopropanol
-    "CC(=O)C",     # acetone
-    "CC#N",        # acetonitrile
-    "CS(=O)C",     # DMSO
-    "CN(C)C=O",    # DMF
-    "ClCCl",       # dichloromethane
-    "ClC(Cl)Cl",   # chloroform
+    "O",  # water
+    "CO",  # methanol
+    "CCO",  # ethanol
+    "CC(C)O",  # isopropanol
+    "CC(=O)C",  # acetone
+    "CC#N",  # acetonitrile
+    "CS(=O)C",  # DMSO
+    "CN(C)C=O",  # DMF
+    "ClCCl",  # dichloromethane
+    "ClC(Cl)Cl",  # chloroform
 )
 
 #: Inorganic ions & halides.
 _INORGANIC_ION_SOURCE: tuple[str, ...] = (
-    "[Na+]", "[K+]", "[Li+]", "[Ca+2]", "[Mg+2]", "[Zn+2]", "[NH4+]",
-    "[F-]", "[Cl-]", "[Br-]", "[I-]", "Cl", "Br", "I",
+    "[Na+]",
+    "[K+]",
+    "[Li+]",
+    "[Ca+2]",
+    "[Mg+2]",
+    "[Zn+2]",
+    "[NH4+]",
+    "[F-]",
+    "[Cl-]",
+    "[Br-]",
+    "[I-]",
+    "Cl",
+    "Br",
+    "I",
 )
 
 #: Fragments at or above this heavy-atom count are "substantial" organic
@@ -182,6 +204,7 @@ def is_counterion_or_solvent(frag_mol: Chem.Mol) -> bool:
     if key is None:  # pragma: no cover - defensive
         return False
     return key in PHARMACEUTICAL_COUNTERIONS_AND_SOLVENTS
+
 
 _PAT_CATECHOL = Chem.MolFromSmarts("c1([OH])c([OH])cccc1")
 _PAT_QUINONE_P = Chem.MolFromSmarts("O=C1C=CC(=O)C=C1")
@@ -261,9 +284,7 @@ def _select_core_fragment(mol: Chem.Mol) -> tuple[Chem.Mol | None, str | None]:
         ):
             unique[species_key] = frag
     core_frags = list(unique.values())
-    substantial = [
-        f for f in core_frags if f.GetNumHeavyAtoms() >= MIN_SUBSTANTIAL_FRAGMENT_HEAVY
-    ]
+    substantial = [f for f in core_frags if f.GetNumHeavyAtoms() >= MIN_SUBSTANTIAL_FRAGMENT_HEAVY]
     if len(substantial) >= 2:
         log.info(
             "rejecting genuine multi-component mixture: %d substantial organic fragments",
@@ -374,9 +395,7 @@ def _count_sugar_polar_groups(mol: Chem.Mol, ring: set[int]) -> int:
                 continue
             if nbr.GetSymbol() == "O":
                 heavy_nbrs = [x for x in nbr.GetNeighbors() if x.GetAtomicNum() > 1]
-                if len(heavy_nbrs) == 1 and (
-                    nbr.GetTotalNumHs() >= 1 or nbr.GetFormalCharge() < 0
-                ):
+                if len(heavy_nbrs) == 1 and (nbr.GetTotalNumHs() >= 1 or nbr.GetFormalCharge() < 0):
                     polar = True  # free hydroxyl / alkoxide
                 continue
             if nbr.GetSymbol() != "C":
@@ -394,9 +413,7 @@ def _count_sugar_polar_groups(mol: Chem.Mol, ring: set[int]) -> int:
                     double_oxy.append(sub)
                     continue
                 heavy_sub = [x for x in sub.GetNeighbors() if x.GetAtomicNum() > 1]
-                if len(heavy_sub) == 1 and (
-                    sub.GetTotalNumHs() >= 1 or sub.GetFormalCharge() < 0
-                ):
+                if len(heavy_sub) == 1 and (sub.GetTotalNumHs() >= 1 or sub.GetFormalCharge() < 0):
                     hydroxyl_oxy.append(sub)
             if double_oxy and hydroxyl_oxy and len(substituents) <= 2:
                 polar = True  # carboxylic acid / carboxylate (uronic acid)
@@ -474,8 +491,7 @@ def identify_sugar_rings(mol: Chem.Mol) -> list[set[int]]:
             continue
         # Ring bonds must all be single bonds (no enol/lactone/aromatic ring bonds)
         bonds = [
-            mol.GetBondBetweenAtoms(ring[i], ring[(i + 1) % len(ring)])
-            for i in range(len(ring))
+            mol.GetBondBetweenAtoms(ring[i], ring[(i + 1) % len(ring)]) for i in range(len(ring))
         ]
         if any(b is None or b.GetBondType() != Chem.BondType.SINGLE for b in bonds):
             continue
@@ -532,8 +548,7 @@ def deglycosylate_tcm_mol(
                 continue
             # Anomeric carbon is directly bonded to the ring oxygen
             is_anomeric = any(
-                nbr.GetIdx() in s_ring and nbr.GetSymbol() == "O"
-                for nbr in atom.GetNeighbors()
+                nbr.GetIdx() in s_ring and nbr.GetSymbol() == "O" for nbr in atom.GetNeighbors()
             )
             if not is_anomeric:
                 continue
@@ -587,9 +602,10 @@ def deglycosylate_tcm_mol(
             for r in capped.GetRingInfo().AtomRings():
                 if len(r) in (5, 6):
                     atoms = [capped.GetAtomWithIdx(i) for i in r]
-                    if not any(a.GetIsAromatic() for a in atoms) and [
-                        a.GetSymbol() for a in atoms
-                    ].count("O") == 1:
+                    if (
+                        not any(a.GetIsAromatic() for a in atoms)
+                        and [a.GetSymbol() for a in atoms].count("O") == 1
+                    ):
                         cand_s_rings.append(r)
             has_aromatic = any(a.GetIsAromatic() for a in capped.GetAtoms())
             cand_total_rings = capped.GetRingInfo().NumRings()

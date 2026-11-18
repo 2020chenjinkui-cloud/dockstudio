@@ -25,7 +25,7 @@ from prompt_toolkit.completion import CompleteEvent, Completer, Completion, Path
 from prompt_toolkit.document import Document
 from prompt_toolkit.formatted_text import HTML
 from prompt_toolkit.history import FileHistory, InMemoryHistory
-from rich.console import Group, RenderableType
+from rich.console import Group
 from rich.table import Table
 from rich.text import Text
 
@@ -57,7 +57,7 @@ def cleanup_active_processes() -> None:
                     proc.wait(timeout=1.0)
                 except subprocess.TimeoutExpired:
                     proc.kill()
-        except Exception:  # noqa: BLE001
+        except Exception:  # 降级兜底
             pass
     ACTIVE_PROCESSES.clear()
 
@@ -75,14 +75,14 @@ SCREEN_CLI_OPTIONS: tuple[tuple[str, str], ...] = (
     ("-r", "受体蛋白结构文件路径 (简写)"),
     ("--library", "待筛选化合物库文件路径 (SMILES/SDF/CSV)"),
     ("-l", "待筛选化合物库文件路径 (简写)"),
-    ("--box-center", "搜索盒中心坐标 (\"x,y,z\")"),
-    ("--box-size", "搜索盒三维边长 (\"sx,sy,sz\" 或单一数值)"),
+    ("--box-center", '搜索盒中心坐标 ("x,y,z")'),
+    ("--box-size", '搜索盒三维边长 ("sx,sy,sz" 或单一数值)'),
     ("--tcm-mode", "启用中药单体双轨比对模式"),
     ("--no-tcm-mode", "关闭中药单体双轨比对模式"),
-    ("--anchor-residues", "口袋锚定残基列表 (\"ASP25:A,THR80:A\")"),
+    ("--anchor-residues", '口袋锚定残基列表 ("ASP25:A,THR80:A")'),
     ("--tier1-ratio", "Tier 1 快速粗筛晋级比例"),
     ("--tier2-ratio", "Tier 2 平衡精筛晋级比例"),
-    ("--seeds", "Tier 2 多 seed 随机种子列表 (\"42,1024,2026\")"),
+    ("--seeds", 'Tier 2 多 seed 随机种子列表 ("42,1024,2026")'),
     ("--strain-threshold", "内部构象张力能惩罚上限 (kcal/mol)"),
     ("--engine", "对接计算引擎 (auto/vina/unidock/gnina)"),
     ("-e", "对接计算引擎 (简写)"),
@@ -342,20 +342,36 @@ def _build_welcome_pane(gpu_info: str | None = None) -> Any:
     body = Text()
     body.append("欢迎使用 ", style="#999999")
     body.append("DockStudio Terminal Agent", style="bold #D77757")
-    body.append("。专为无头 Linux 服务器与 SSH 终端设计的交互式分子对接工作台。\n\n", style="#999999")
+    body.append(
+        "。专为无头 Linux 服务器与 SSH 终端设计的交互式分子对接工作台。\n\n", style="#999999"
+    )
 
     table = Table(box=None, padding=(0, 2), show_header=False)
     table.add_column("Command", style="bold #D77757", width=12)
     table.add_column("Action", style="#FFFFFF", width=26)
     table.add_column("Description", style="#999999")
 
-    table.add_row("/dock", "单分子高精度对接向导", "受体 → 口袋定盒 → 配体 → Vina/GNINA 对接 → 质检")
-    table.add_row("/screen", "高通量虚拟筛选向导", "GPU Uni-Dock (1000x) / 多核并行海量小分子库打分")
-    table.add_row("/engines", "硬件算力与引擎探针", "探查 CPU、NVIDIA Tesla/GeForce GPU 与对接引擎就绪状态")
-    table.add_row("/prep", "受体 / 配体预处理向导", "PDB/SDF 质子化、加氢、指派 Gasteiger 电荷与转 PDBQT")
-    table.add_row("/verify", "外包交付物合规验收", "运行 T1~T5 自动化数值验收套件，复算重现性与数据链自洽")
-    table.add_row("/audit", "事件审计与防篡改验证", "检验 inputs.sha256 指纹与 events.jsonl 不可篡改哈希链")
-    table.add_row("/view", "3D 结构即用即焚查看", "启动轻量内网 Web 3D 快速预览或纯终端 ASCII 构象轮廓")
+    table.add_row(
+        "/dock", "单分子高精度对接向导", "受体 → 口袋定盒 → 配体 → Vina/GNINA 对接 → 质检"
+    )
+    table.add_row(
+        "/screen", "高通量虚拟筛选向导", "GPU Uni-Dock (1000x) / 多核并行海量小分子库打分"
+    )
+    table.add_row(
+        "/engines", "硬件算力与引擎探针", "探查 CPU、NVIDIA Tesla/GeForce GPU 与对接引擎就绪状态"
+    )
+    table.add_row(
+        "/prep", "受体 / 配体预处理向导", "PDB/SDF 质子化、加氢、指派 Gasteiger 电荷与转 PDBQT"
+    )
+    table.add_row(
+        "/verify", "外包交付物合规验收", "运行 T1~T5 自动化数值验收套件，复算重现性与数据链自洽"
+    )
+    table.add_row(
+        "/audit", "事件审计与防篡改验证", "检验 inputs.sha256 指纹与 events.jsonl 不可篡改哈希链"
+    )
+    table.add_row(
+        "/view", "3D 结构即用即焚查看", "启动轻量内网 Web 3D 快速预览或纯终端 ASCII 构象轮廓"
+    )
     table.add_row("/help", "命令手册与热键指南", "查看全部斜杠指令、参数格式与快捷操作热键")
     table.add_row("/exit", "退出 Agent 工作台", "安全终止后台子任务并返回宿主系统 Shell")
 
@@ -535,10 +551,13 @@ def _dispatch_command(
 
         if workspace:
             workspace.prepare_command_canvas(show_header=True)
-        choice = select_one("选择准备目标:", [
-            ("受体蛋白准备 (Receptor Prep)", "清洗、加氢、指派电荷、转 PDBQT"),
-            ("小分子配体准备 (Ligand Prep)", "SMILES/SDF 质子化、低能 3D 构象生成"),
-        ])
+        choice = select_one(
+            "选择准备目标:",
+            [
+                ("受体蛋白准备 (Receptor Prep)", "清洗、加氢、指派电荷、转 PDBQT"),
+                ("小分子配体准备 (Ligand Prep)", "SMILES/SDF 质子化、低能 3D 构象生成"),
+            ],
+        )
         if choice == 0:
             run_prep_receptor_interactive()
         else:
@@ -604,7 +623,9 @@ def _dispatch_command(
         workspace.flash_notice = (f"未知命令: {raw_cmd} (输入 /help 查看帮助)", "bold #FF6B80")
         workspace.refresh()
     else:
-        console.print(f"[#FF6B80]未知命令: {raw_cmd}[/#FF6B80] (输入 [bold #D77757]/help[/bold #D77757] 查看帮助)")
+        console.print(
+            f"[#FF6B80]未知命令: {raw_cmd}[/#FF6B80] (输入 [bold #D77757]/help[/bold #D77757] 查看帮助)"
+        )
     return 1
 
 
@@ -650,7 +671,7 @@ def run_agent_repl(store: Any = None) -> int:
         with open(history_file, "a", encoding="utf-8"):
             pass
         history = FileHistory(str(history_file))
-    except Exception:  # noqa: BLE001
+    except Exception:  # 降级兜底
         history = InMemoryHistory()
 
     # 3. Dynamic toolbar renderer
@@ -719,7 +740,7 @@ def run_agent_repl(store: Any = None) -> int:
                 workspace.flash_notice = ("当前操作已被中断", "dim")
                 workspace.refresh()
                 cleanup_active_processes()
-            except Exception as err:  # noqa: BLE001
+            except Exception as err:  # 降级兜底
                 workspace.flash_notice = (f"执行出错: {err}", "bold #FF6B80")
                 workspace.refresh()
     finally:

@@ -20,19 +20,19 @@ Implements:
 from __future__ import annotations
 
 import csv
-import io
 import json
 import math
 import os
 import shutil
 import threading
 import time
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 from rdkit import Chem
 from rdkit.Chem import AllChem
 
@@ -50,10 +50,8 @@ from ..engines.vina import VinaEngine
 from ..logging import get_logger
 from ..models import (
     Box,
-    DockingError,
     DockParams,
     DockResult,
-    Pose,
     PreparedLibrary,
     PreparedLigand,
     ScreeningCandidateRow,
@@ -67,6 +65,7 @@ log = get_logger("core.screen_runner")
 # ---------------------------------------------------------------------------
 # Worker Pool Allocation
 # ---------------------------------------------------------------------------
+
 
 def calculate_worker_pool_size(
     total_cpus: int,
@@ -98,6 +97,7 @@ def calculate_cpu_workers(
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _csv_safe(value: Any) -> str:
     """Neutralize spreadsheet formula injection in exported text cells."""
@@ -172,8 +172,26 @@ _AUTODOCK_TYPE_TO_ELEMENT: dict[str, str] = {
 #: Two-letter element symbols that may legitimately appear in a PDB atom name.
 _PDB_TWO_LETTER_ELEMENTS = frozenset(
     {
-        "CL", "BR", "NA", "MG", "ZN", "FE", "CA", "MN", "CU", "NI",
-        "CO", "SI", "SE", "LI", "AL", "CD", "HG", "PT", "AU", "AG",
+        "CL",
+        "BR",
+        "NA",
+        "MG",
+        "ZN",
+        "FE",
+        "CA",
+        "MN",
+        "CU",
+        "NI",
+        "CO",
+        "SI",
+        "SE",
+        "LI",
+        "AL",
+        "CD",
+        "HG",
+        "PT",
+        "AU",
+        "AG",
     }
 )
 
@@ -300,7 +318,7 @@ def _load_pose_mol_with_openbabel(chunk: str) -> Chem.Mol | None:
         mol = Chem.MolFromMolBlock(sdf_text, sanitize=False, removeHs=False)
         if mol is not None and mol.GetNumConformers() > 0:
             return mol
-    except Exception as exc:  # noqa: BLE001 - OpenBabel is an optional fallback
+    except Exception as exc:  # 降级兜底 - OpenBabel is an optional fallback
         log.debug("OpenBabel PDBQT fallback failed: %s", exc)
     return None
 
@@ -442,13 +460,11 @@ def pose_coords_are_real(mol: Chem.Mol | None) -> bool:
         return False
 
 
-def _restore_bond_orders_from_template(
-    ref_no_h: Chem.Mol, pose_no_h: Chem.Mol
-) -> Chem.Mol | None:
+def _restore_bond_orders_from_template(ref_no_h: Chem.Mol, pose_no_h: Chem.Mol) -> Chem.Mol | None:
     """Transfers bond orders/aromaticity from the template onto the docked pose."""
     try:
         assigned = AllChem.AssignBondOrdersFromTemplate(ref_no_h, pose_no_h)
-    except Exception as exc:  # noqa: BLE001 - RDKit raises ValueError on mismatch
+    except Exception as exc:  # 降级兜底 - RDKit raises ValueError on mismatch
         log.debug("AssignBondOrdersFromTemplate failed: %s", exc)
         return None
     if assigned is None:
@@ -482,9 +498,7 @@ def _restore_bond_orders_from_template(
     return _mark_real_pose_coords(assigned, True)
 
 
-def _restore_by_substructure_coords(
-    ref_no_h: Chem.Mol, pose_no_h: Chem.Mol
-) -> Chem.Mol | None:
+def _restore_by_substructure_coords(ref_no_h: Chem.Mol, pose_no_h: Chem.Mol) -> Chem.Mol | None:
     """Builds the template molecule on the real docked coordinates (substructure copy)."""
     try:
         match = pose_no_h.GetSubstructMatch(_generic_query_mol(ref_no_h))
@@ -808,7 +822,7 @@ def evaluate_anchor_match(
 
     rec_atoms: list[tuple[str, str, int, tuple[float, float, float]]] = []
     for line in rec_text.splitlines():
-        if (line.startswith("ATOM  ") or line.startswith("HETATM")) and len(line) >= 54:
+        if line.startswith(("ATOM  ", "HETATM")) and len(line) >= 54:
             resname = line[17:20].strip().upper()
             chain = line[21:22].strip().upper() or "_"
             try:
@@ -872,6 +886,7 @@ def evaluate_anchor_match(
 # Progress Event & Checkpoint Manager
 # ---------------------------------------------------------------------------
 
+
 class ScreeningProgressEvent(BaseModel):
     """Event emitted periodically to notify UI or CLI of screening progress."""
 
@@ -888,7 +903,9 @@ class ScreeningProgressEvent(BaseModel):
 class CheckpointState(dict):
     """Container holding checkpoint data by tier and flat by ligand ID."""
 
-    def __init__(self, by_tier: dict[int, dict[str, dict[str, Any]]], by_id: dict[str, dict[str, Any]]):
+    def __init__(
+        self, by_tier: dict[int, dict[str, dict[str, Any]]], by_id: dict[str, dict[str, Any]]
+    ):
         super().__init__(by_tier)
         self.by_id = by_id
 
@@ -981,10 +998,9 @@ class CheckpointManager:
 
     def _write_line(self, data: dict[str, Any]) -> None:
         line = json.dumps(data, ensure_ascii=False)
-        with self._lock:
-            with open(self.path, "a", encoding="utf-8") as f:
-                f.write(line + "\n")
-                f.flush()
+        with self._lock, open(self.path, "a", encoding="utf-8") as f:
+            f.write(line + "\n")
+            f.flush()
 
     def load_completed(self) -> CheckpointState:
         """Loads completed records grouped by tier and by ligand_id."""
@@ -1019,6 +1035,7 @@ class CheckpointManager:
 # CSV Exporters
 # ---------------------------------------------------------------------------
 
+
 def export_funnel_csv(report: ScreeningFunnelReport, csv_path: Path) -> Path:
     """Exports stage loss accounting CSV strictly matching /verify T5 expectations."""
     csv_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1029,9 +1046,7 @@ def export_funnel_csv(report: ScreeningFunnelReport, csv_path: Path) -> Path:
     return csv_path
 
 
-def export_screening_results_csv(
-    candidates: list[ScreeningCandidateRow], csv_path: Path
-) -> Path:
+def export_screening_results_csv(candidates: list[ScreeningCandidateRow], csv_path: Path) -> Path:
     """Exports final candidate ranking with formula-injection neutralization,
     including backward-compatible Affinity and InChIKey headers for /verify compatibility.
 
@@ -1045,34 +1060,36 @@ def export_screening_results_csv(
     csv_path.parent.mkdir(parents=True, exist_ok=True)
     with open(csv_path, "w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
-        writer.writerow([
-            "Rank",
-            "Ligand_ID",
-            "Ligand_Name",
-            "Derivative_Type",
-            "Parent_ID",
-            "Affinity_Mean_kcal_mol",
-            "Affinity_Std",
-            "Affinity",  # Backward-compatible alias for /verify and legacy tools
-            "Pose_RMSD_Seed_A",
-            "SILE",
-            "LE",
-            "LLE",
-            "Strain_Energy_kcal_mol",
-            "CNN_Score",
-            "CNN_Affinity",
-            "Anchor_Match_Ratio",
-            "PoseBusters_OK",
-            "ECR_Score",
-            "ECR_Rank",
-            "Cluster_ID",
-            "Is_Cluster_Rep",
-            "Alerts",
-            "InChIKey",  # For /verify T3 structural identity verification
-            "SMILES",
-            "Affinity_Corrected",  # dG_corr = raw + 0.5*max(0, dE_strain - 3.0)
-            "Best_Pose_Path",  # Real docked out.pdbqt behind the delivered conformer
-        ])
+        writer.writerow(
+            [
+                "Rank",
+                "Ligand_ID",
+                "Ligand_Name",
+                "Derivative_Type",
+                "Parent_ID",
+                "Affinity_Mean_kcal_mol",
+                "Affinity_Std",
+                "Affinity",  # Backward-compatible alias for /verify and legacy tools
+                "Pose_RMSD_Seed_A",
+                "SILE",
+                "LE",
+                "LLE",
+                "Strain_Energy_kcal_mol",
+                "CNN_Score",
+                "CNN_Affinity",
+                "Anchor_Match_Ratio",
+                "PoseBusters_OK",
+                "ECR_Score",
+                "ECR_Rank",
+                "Cluster_ID",
+                "Is_Cluster_Rep",
+                "Alerts",
+                "InChIKey",  # For /verify T3 structural identity verification
+                "SMILES",
+                "Affinity_Corrected",  # dG_corr = raw + 0.5*max(0, dE_strain - 3.0)
+                "Best_Pose_Path",  # Real docked out.pdbqt behind the delivered conformer
+            ]
+        )
         for rank, c in enumerate(candidates, start=1):
             inchikey = getattr(c, "inchikey", "") or ""
             if not inchikey and c.smiles:
@@ -1082,43 +1099,44 @@ def export_screening_results_csv(
                         inchikey = Chem.MolToInchiKey(m)
                 except Exception:
                     pass
-            affinity_compat = (
-                c.affinity_seed0 if c.affinity_seed0 is not None else c.affinity_mean
+            affinity_compat = c.affinity_seed0 if c.affinity_seed0 is not None else c.affinity_mean
+            writer.writerow(
+                [
+                    rank,
+                    _csv_safe(c.ligand_id),
+                    _csv_safe(c.ligand_name or ""),
+                    _csv_safe(c.derivative_type),
+                    _csv_safe(c.parent_id or ""),
+                    f"{c.affinity_mean:.3f}",
+                    f"{c.affinity_std:.3f}",
+                    f"{affinity_compat:.3f}",  # Affinity alias mirrors the primary seed
+                    f"{c.pose_rmsd_seed:.3f}" if c.pose_rmsd_seed is not None else "",
+                    f"{c.sile:.4f}",
+                    f"{c.le:.4f}",
+                    f"{c.lle:.4f}",
+                    f"{c.strain_energy:.3f}",
+                    f"{c.cnn_score:.4f}" if c.cnn_score is not None else "",
+                    f"{c.cnn_affinity:.4f}" if c.cnn_affinity is not None else "",
+                    f"{c.anchor_match_ratio:.2f}",
+                    1 if c.posebusters_ok else 0,
+                    f"{c.ecr_score:.5f}",
+                    c.ecr_rank,
+                    c.cluster_id,
+                    1 if c.is_cluster_rep else 0,
+                    _csv_safe(";".join(c.alerts)),
+                    _csv_safe(inchikey),
+                    _csv_safe(c.smiles or ""),
+                    f"{c.affinity_corrected:.3f}" if c.affinity_corrected is not None else "",
+                    _csv_safe(c.best_pose_path or ""),
+                ]
             )
-            writer.writerow([
-                rank,
-                _csv_safe(c.ligand_id),
-                _csv_safe(c.ligand_name or ""),
-                _csv_safe(c.derivative_type),
-                _csv_safe(c.parent_id or ""),
-                f"{c.affinity_mean:.3f}",
-                f"{c.affinity_std:.3f}",
-                f"{affinity_compat:.3f}",  # Affinity alias mirrors the primary seed
-                f"{c.pose_rmsd_seed:.3f}" if c.pose_rmsd_seed is not None else "",
-                f"{c.sile:.4f}",
-                f"{c.le:.4f}",
-                f"{c.lle:.4f}",
-                f"{c.strain_energy:.3f}",
-                f"{c.cnn_score:.4f}" if c.cnn_score is not None else "",
-                f"{c.cnn_affinity:.4f}" if c.cnn_affinity is not None else "",
-                f"{c.anchor_match_ratio:.2f}",
-                1 if c.posebusters_ok else 0,
-                f"{c.ecr_score:.5f}",
-                c.ecr_rank,
-                c.cluster_id,
-                1 if c.is_cluster_rep else 0,
-                _csv_safe(";".join(c.alerts)),
-                _csv_safe(inchikey),
-                _csv_safe(c.smiles or ""),
-                f"{c.affinity_corrected:.3f}" if c.affinity_corrected is not None else "",
-                _csv_safe(c.best_pose_path or ""),
-            ])
     return csv_path
 
 
 # ---------------------------------------------------------------------------
 # Main ScreeningRunner
 # ---------------------------------------------------------------------------
+
 
 class ScreeningRunner:
     """3-Tier Hierarchical High-Throughput Virtual Screening Runner."""
@@ -1127,7 +1145,11 @@ class ScreeningRunner:
         self,
         config: ScreeningConfig | None = None,
         receptor_pdbqt: Path | str | None = None,
-        ligands: list[PreparedLigand] | dict[str, PreparedLigand] | PreparedLibrary | list[Path] | None = None,
+        ligands: list[PreparedLigand]
+        | dict[str, PreparedLigand]
+        | PreparedLibrary
+        | list[Path]
+        | None = None,
         out_dir: Path | str | None = None,
         engine: DockEngine | str | None = None,
         protein_pdb: Path | str | None = None,
@@ -1309,7 +1331,7 @@ class ScreeningRunner:
         try:
             pose_sdf.parent.mkdir(parents=True, exist_ok=True)
             pose_sdf.write_text(Chem.MolToMolBlock(pose_mol), encoding="utf-8")
-        except Exception as exc:  # noqa: BLE001 - QC must never break screening
+        except Exception as exc:  # 降级兜底 - QC must never break screening
             log.warning("Could not export pose SDF for %s: %s", ligand_id, exc)
             return True, []
         try:
@@ -1318,14 +1340,12 @@ class ScreeningRunner:
                 box=self.config.box,
                 protein_pdb=self.protein_pdb,
             )
-        except Exception as exc:  # noqa: BLE001 - QC must never break screening
+        except Exception as exc:  # 降级兜底 - QC must never break screening
             log.warning("check_pose failed for %s: %s", ligand_id, exc)
             return True, []
         if pose_chk.ok:
             return True, []
-        alerts = [
-            f"POSECHECK_{issue.rule}: {issue.message}" for issue in pose_chk.issues
-        ]
+        alerts = [f"POSECHECK_{issue.rule}: {issue.message}" for issue in pose_chk.issues]
         return False, alerts
 
     def _emit_progress(
@@ -1390,7 +1410,11 @@ class ScreeningRunner:
             n_prep = 0
 
         # Load completed checkpoint states if resuming
-        checkpoint_state = self.checkpoint.load_completed() if self.resume else CheckpointState({1: {}, 2: {}, 3: {}}, {})
+        checkpoint_state = (
+            self.checkpoint.load_completed()
+            if self.resume
+            else CheckpointState({1: {}, 2: {}, 3: {}}, {})
+        )
 
         # Branch: Single-tier standard docking
         if not self.config.enable_tiered_funnel:
@@ -1408,8 +1432,19 @@ class ScreeningRunner:
 
         if not tier1_candidates or self._cancel_requested:
             return self._finalize_report(
-                n_raw, n_desalt, n_dedup, n_chiral, n_prep, n_ready,
-                n_tier1_in, n_tier1_out, 0, 0, 0, 0, []
+                n_raw,
+                n_desalt,
+                n_dedup,
+                n_chiral,
+                n_prep,
+                n_ready,
+                n_tier1_in,
+                n_tier1_out,
+                0,
+                0,
+                0,
+                0,
+                [],
             )
 
         # -------------------------------------------------------------------
@@ -1422,8 +1457,19 @@ class ScreeningRunner:
 
         if not tier2_candidates or self._cancel_requested:
             return self._finalize_report(
-                n_raw, n_desalt, n_dedup, n_chiral, n_prep, n_ready,
-                n_tier1_in, n_tier1_out, n_tier2_in, n_tier2_out, 0, 0, []
+                n_raw,
+                n_desalt,
+                n_dedup,
+                n_chiral,
+                n_prep,
+                n_ready,
+                n_tier1_in,
+                n_tier1_out,
+                n_tier2_in,
+                n_tier2_out,
+                0,
+                0,
+                [],
             )
 
         # -------------------------------------------------------------------
@@ -1434,8 +1480,18 @@ class ScreeningRunner:
         n_tier3_out = len(final_candidates)
 
         return self._finalize_report(
-            n_raw, n_desalt, n_dedup, n_chiral, n_prep, n_ready,
-            n_tier1_in, n_tier1_out, n_tier2_in, n_tier2_out, n_tier3_in, n_tier3_out,
+            n_raw,
+            n_desalt,
+            n_dedup,
+            n_chiral,
+            n_prep,
+            n_ready,
+            n_tier1_in,
+            n_tier1_out,
+            n_tier2_in,
+            n_tier2_out,
+            n_tier3_in,
+            n_tier3_out,
             final_candidates,
         )
 
@@ -1484,18 +1540,29 @@ class ScreeningRunner:
             else:
                 pending_items.append(lig)
 
-        log.info("Single-tier: %d completed from checkpoint, %d pending", len(results_by_id), len(pending_items))
+        log.info(
+            "Single-tier: %d completed from checkpoint, %d pending",
+            len(results_by_id),
+            len(pending_items),
+        )
 
         if pending_items and not self._cancel_requested:
-            workers, cpu_per_job = calculate_cpu_workers(self.config.cpu, self.cpu_per_job, len(pending_items))
+            workers, cpu_per_job = calculate_cpu_workers(
+                self.config.cpu, self.cpu_per_job, len(pending_items)
+            )
             box = self.config.box or Box(center=(0, 0, 0), size=(20, 20, 20))
-            params = DockParams(exhaustiveness=8, num_modes=9, cpu=cpu_per_job, scoring="vina", seed=42)
+            params = DockParams(
+                exhaustiveness=8, num_modes=9, cpu=cpu_per_job, scoring="vina", seed=42
+            )
 
             if self._engine_has_native_batch():
                 # GPU engines: chunked native dock_batch() dispatch (P1-4), never a
                 # per-molecule serial dock() loop on the GPU adapter.
-                self._run_single_tier_batch(pending_items, dock_dir, results_by_id, total, t_start, box, params)
+                self._run_single_tier_batch(
+                    pending_items, dock_dir, results_by_id, total, t_start, box, params
+                )
             else:
+
                 def _do_single_dock(lig: PreparedLigand) -> dict[str, Any]:
                     if self._cancel_requested:
                         raise KeyboardInterrupt("Docking cancelled")
@@ -1509,7 +1576,9 @@ class ScreeningRunner:
                     return self._collect_single_tier_result(lig, res, sub_dir)
 
                 with ThreadPoolExecutor(max_workers=workers) as executor:
-                    future_to_lig = {executor.submit(_do_single_dock, lig): lig for lig in pending_items}
+                    future_to_lig = {
+                        executor.submit(_do_single_dock, lig): lig for lig in pending_items
+                    }
                     for fut in as_completed(future_to_lig):
                         lig = future_to_lig[fut]
                         try:
@@ -1603,17 +1672,31 @@ class ScreeningRunner:
                 c.is_cluster_rep = False
                 cluster_map.setdefault(c.cluster_id, []).append(c)
 
-            for cid, cands in cluster_map.items():
+            for cands in cluster_map.values():
                 best = min(
                     cands,
-                    key=lambda x: (x.ecr_rank if x.ecr_rank > 0 else 999999, -x.ecr_score, x.affinity_mean),
+                    key=lambda x: (
+                        x.ecr_rank if x.ecr_rank > 0 else 999999,
+                        -x.ecr_score,
+                        x.affinity_mean,
+                    ),
                 )
                 best.is_cluster_rep = True
 
         n_success = len(candidates)
         return self._finalize_report(
-            n_raw, n_desalt, n_dedup, n_chiral, n_prep, n_ready,
-            n_ready, n_ready, n_ready, n_ready, n_ready, n_success,
+            n_raw,
+            n_desalt,
+            n_dedup,
+            n_chiral,
+            n_prep,
+            n_ready,
+            n_ready,
+            n_ready,
+            n_ready,
+            n_ready,
+            n_ready,
+            n_success,
             candidates,
         )
 
@@ -1672,7 +1755,7 @@ class ScreeningRunner:
                 batch_res = self.engine.dock_batch(
                     self.receptor_pdbqt, batch_tuples, box, params, batch_dir
                 )
-            except Exception as exc:  # noqa: BLE001 - engine failure must not abort it all
+            except Exception as exc:  # 降级兜底 - engine failure must not abort it all
                 log.warning("Single-tier dock_batch failed (%s); isolating per ligand", exc)
                 batch_res = {}
             for lig in chunk:
@@ -1712,18 +1795,24 @@ class ScreeningRunner:
                 affinity = float(rec.get("affinity", 0.0))
                 if affinity >= 900.0 or _find_pose_file_in_dir(run_dir, lig.id) is None:
                     self._mark_dock_failed(lig.id)
-                tier1_results.append({
-                    "ligand": lig,
-                    "affinity": affinity,
-                    "sile": float(rec.get("sile", 0.0)),
-                    "le": float(rec.get("le", 0.0)),
-                    "lle": float(rec.get("lle", 0.0)),
-                    "run_dir": run_dir,
-                })
+                tier1_results.append(
+                    {
+                        "ligand": lig,
+                        "affinity": affinity,
+                        "sile": float(rec.get("sile", 0.0)),
+                        "le": float(rec.get("le", 0.0)),
+                        "lle": float(rec.get("lle", 0.0)),
+                        "run_dir": run_dir,
+                    }
+                )
             else:
                 pending_items.append(lig)
 
-        log.info("Tier 1: %d completed from checkpoint, %d pending", len(tier1_results), len(pending_items))
+        log.info(
+            "Tier 1: %d completed from checkpoint, %d pending",
+            len(tier1_results),
+            len(pending_items),
+        )
 
         # 2. Dock pending items
         if pending_items and not self._cancel_requested:
@@ -1741,7 +1830,7 @@ class ScreeningRunner:
 
         # Apply Tier 1 keep ratio (default 15%)
         keep_ratio = self.config.tier1_keep_ratio
-        k = max(1, min(len(valid), int(math.ceil(len(valid) * keep_ratio))))
+        k = max(1, min(len(valid), math.ceil(len(valid) * keep_ratio)))
         k = min(k, self.config.tier1_max_candidates)
         passed = valid[:k]
         log.info("Tier 1 complete: %d/%d passed cutoff (k=%d)", len(passed), total, k)
@@ -1756,7 +1845,9 @@ class ScreeningRunner:
         t_start: float,
     ) -> None:
         """Executes Tier 1 single docks across multi-core worker thread pool."""
-        workers, cpu_per_job = calculate_cpu_workers(self.config.cpu, self.cpu_per_job, len(pending))
+        workers, cpu_per_job = calculate_cpu_workers(
+            self.config.cpu, self.cpu_per_job, len(pending)
+        )
         box = self.config.box or Box(center=(0, 0, 0), size=(20, 20, 20))
         params = DockParams(exhaustiveness=4, num_modes=1, cpu=cpu_per_job, scoring="vina", seed=42)
 
@@ -1802,8 +1893,7 @@ class ScreeningRunner:
                     self._mark_dock_failed(lig.id)
                     log.warning("Tier 1 worker error on %s: %s", lig.id, exc)
                 self._emit_progress(
-                    1, "Tier 1: HTVS Fast Docking", len(results), total,
-                    lig.id, t_start
+                    1, "Tier 1: HTVS Fast Docking", len(results), total, lig.id, t_start
                 )
 
     def _run_tier1_batch(
@@ -1866,17 +1956,18 @@ class ScreeningRunner:
                     run_dir=run_dir,
                     n_modes=len(dock_res.poses) if dock_res else 0,
                 )
-                results.append({
-                    "ligand": lig,
-                    "affinity": top_aff,
-                    "sile": float(effs["sile"] or 0.0),
-                    "le": float(effs["le"] or 0.0),
-                    "lle": float(effs["lle"] or 0.0),
-                    "run_dir": run_dir,
-                })
+                results.append(
+                    {
+                        "ligand": lig,
+                        "affinity": top_aff,
+                        "sile": float(effs["sile"] or 0.0),
+                        "le": float(effs["le"] or 0.0),
+                        "lle": float(effs["lle"] or 0.0),
+                        "run_dir": run_dir,
+                    }
+                )
                 self._emit_progress(
-                    1, "Tier 1: HTVS Fast GPU Batch", len(results), total,
-                    lig.id, t_start
+                    1, "Tier 1: HTVS Fast GPU Batch", len(results), total, lig.id, t_start
                 )
 
     # -----------------------------------------------------------------------
@@ -1907,39 +1998,47 @@ class ScreeningRunner:
                 seed_dirs = [
                     str(d) for d in (rec.get("seed_run_dirs") or [r.get("run_dir", "")]) if d
                 ]
-                seed_affs = [
-                    float(a) for a in (rec.get("seed_affinities") or []) if a is not None
-                ]
+                seed_affs = [float(a) for a in (rec.get("seed_affinities") or []) if a is not None]
                 best_pose: Path | None = None
                 for seed_dir in seed_dirs:
                     best_pose = _find_pose_file_in_dir(seed_dir, lig.id)
                     if best_pose is not None:
                         break
-                tier2_results.append({
-                    "ligand": lig,
-                    "affinity_mean": float(rec.get("affinity_mean", r["affinity"])),
-                    "affinity_std": float(rec.get("affinity_std", 0.0)),
-                    "pose_rmsd_seed": rec.get("pose_rmsd_seed"),
-                    "is_converged": bool(rec.get("is_converged", True)),
-                    "sile": r["sile"],
-                    "run_dir": seed_dirs[0] if seed_dirs else r.get("run_dir", str(tier2_dir / f"dock_{lig.id}")),
-                    "seed_run_dirs": seed_dirs,
-                    "seed_affinities": seed_affs,
-                    "affinity_seed0": seed_affs[0] if seed_affs else None,
-                    "affinity_corrected": None,
-                    "strain_energy": 0.0,
-                    "best_pose_path": str(best_pose) if best_pose is not None else None,
-                    "is_strain_ok": True,
-                })
+                tier2_results.append(
+                    {
+                        "ligand": lig,
+                        "affinity_mean": float(rec.get("affinity_mean", r["affinity"])),
+                        "affinity_std": float(rec.get("affinity_std", 0.0)),
+                        "pose_rmsd_seed": rec.get("pose_rmsd_seed"),
+                        "is_converged": bool(rec.get("is_converged", True)),
+                        "sile": r["sile"],
+                        "run_dir": seed_dirs[0]
+                        if seed_dirs
+                        else r.get("run_dir", str(tier2_dir / f"dock_{lig.id}")),
+                        "seed_run_dirs": seed_dirs,
+                        "seed_affinities": seed_affs,
+                        "affinity_seed0": seed_affs[0] if seed_affs else None,
+                        "affinity_corrected": None,
+                        "strain_energy": 0.0,
+                        "best_pose_path": str(best_pose) if best_pose is not None else None,
+                        "is_strain_ok": True,
+                    }
+                )
             else:
                 pending_items.append(r)
 
-        log.info("Tier 2: %d completed from checkpoint, %d pending", len(tier2_results), len(pending_items))
+        log.info(
+            "Tier 2: %d completed from checkpoint, %d pending",
+            len(tier2_results),
+            len(pending_items),
+        )
 
         # 2. Multi-seed docking for pending items (native GPU batching or CPU pool)
         if pending_items and not self._cancel_requested:
             if self._engine_has_native_batch():
-                self._run_tier2_batch(pending_items, tier2_dir, tier2_results, total, t_start, box, seeds)
+                self._run_tier2_batch(
+                    pending_items, tier2_dir, tier2_results, total, t_start, box, seeds
+                )
             else:
                 _, cpu_per_job = calculate_cpu_workers(
                     self.config.cpu, self.cpu_per_job, len(pending_items)
@@ -1950,16 +2049,17 @@ class ScreeningRunner:
 
         # 3. Convergence & Strain QC filtering (strict: no "pad up to 3" back door)
         converged = [
-            r for r in tier2_results
+            r
+            for r in tier2_results
             if r["affinity_mean"] < 900.0 and r["is_converged"] and r.get("is_strain_ok", True)
         ]
         if not converged and tier2_results:
             # Only when *nothing* passed the strict QC: keep the single best penalised
             # candidate and flag it loudly instead of silently waiving the thresholds
             # (report P0-2.2 / Task Fix 3.2.2).
-            fallback_pool = [
-                r for r in tier2_results if r["affinity_mean"] < 900.0
-            ] or list(tier2_results)
+            fallback_pool = [r for r in tier2_results if r["affinity_mean"] < 900.0] or list(
+                tier2_results
+            )
             fallback_pool.sort(key=lambda x: x.get("sile", 0.0), reverse=True)
             fallback = fallback_pool[0]
             fallback["qc_fallback_warning"] = "UNCONVERGED_OR_HIGH_STRAIN"
@@ -1978,7 +2078,7 @@ class ScreeningRunner:
         # Apply Tier 2 keep ratio (default 2% of original ready library)
         n_base = len(self.ligand_dict)
         keep_ratio = self.config.tier2_keep_ratio
-        k = max(1, min(len(converged), int(math.ceil(n_base * keep_ratio))))
+        k = max(1, min(len(converged), math.ceil(n_base * keep_ratio)))
         k = min(k, self.config.tier2_max_candidates)
         passed = converged[:k]
         log.info("Tier 2 complete: %d/%d passed convergence & cutoff (k=%d)", len(passed), total, k)
@@ -2055,7 +2155,7 @@ class ScreeningRunner:
                     is_high_strain or strain_e > self.config.max_strain_kcal
                 ):
                     is_strain_ok = False
-            except Exception as exc:  # noqa: BLE001 - strain QC is best effort
+            except Exception as exc:  # 降级兜底 - strain QC is best effort
                 log.warning("Strain energy calculation failed for %s: %s", lig.id, exc)
 
         # The strain penalty must actually drive the SILE ranking (P0-2.1).
@@ -2070,9 +2170,7 @@ class ScreeningRunner:
             if pose_file is not None:
                 best_pose_path = str(pose_file)
                 break
-        affinity_seed0 = (
-            affinities[0] if affinities and affinities[0] < 900.0 else None
-        )
+        affinity_seed0 = affinities[0] if affinities and affinities[0] < 900.0 else None
 
         self.checkpoint.record_tier2(
             ligand_id=lig.id,
@@ -2151,12 +2249,16 @@ class ScreeningRunner:
                 row = fut_map[fut]
                 try:
                     results.append(fut.result())
-                except Exception as exc:  # noqa: BLE001 - isolate one ligand's failure
+                except Exception as exc:  # 降级兜底 - isolate one ligand's failure
                     self._mark_dock_failed(row["ligand"].id)
                     log.warning("Tier 2 error on %s: %s", row["ligand"].id, exc)
                 self._emit_progress(
-                    2, "Tier 2: SP Balanced Multi-Seed", len(results), total,
-                    row["ligand"].id, t_start
+                    2,
+                    "Tier 2: SP Balanced Multi-Seed",
+                    len(results),
+                    total,
+                    row["ligand"].id,
+                    t_start,
                 )
 
     def _run_tier2_batch(
@@ -2189,17 +2291,13 @@ class ScreeningRunner:
                 chunk = pending[chunk_idx : chunk_idx + self.batch_size]
                 batch_dir = tier2_dir / f"seed_{seed}" / f"batch_{chunk_idx // self.batch_size}"
                 batch_dir.mkdir(parents=True, exist_ok=True)
-                batch_tuples = [
-                    (row["ligand"].id, Path(row["ligand"].pdbqt_path)) for row in chunk
-                ]
-                params = DockParams(
-                    exhaustiveness=8, num_modes=9, scoring="vina", seed=seed
-                )
+                batch_tuples = [(row["ligand"].id, Path(row["ligand"].pdbqt_path)) for row in chunk]
+                params = DockParams(exhaustiveness=8, num_modes=9, scoring="vina", seed=seed)
                 try:
                     batch_res = self.engine.dock_batch(
                         self.receptor_pdbqt, batch_tuples, box, params, batch_dir
                     )
-                except Exception as exc:  # noqa: BLE001 - isolate batch failure per seed
+                except Exception as exc:  # 降级兜底 - isolate batch failure per seed
                     log.warning("Tier 2 dock_batch (seed=%s) failed: %s", seed, exc)
                     batch_res = {}
                 for row in chunk:
@@ -2231,7 +2329,7 @@ class ScreeningRunner:
                         bucket["pose_files"],
                     )
                 )
-            except Exception as exc:  # noqa: BLE001 - isolate one ligand's failure
+            except Exception as exc:  # 降级兜底 - isolate one ligand's failure
                 self._mark_dock_failed(lig.id)
                 log.warning("Tier 2 (batch) error on %s: %s", lig.id, exc)
             self._emit_progress(
@@ -2268,7 +2366,9 @@ class ScreeningRunner:
             else:
                 pending_items.append(r)
 
-        log.info("Tier 3: %d completed from checkpoint, %d pending", len(candidates), len(pending_items))
+        log.info(
+            "Tier 3: %d completed from checkpoint, %d pending", len(candidates), len(pending_items)
+        )
 
         # Check GNINA availability once
         gnina_eng: DockEngine | None = None
@@ -2389,11 +2489,11 @@ class ScreeningRunner:
                 affinity_mean=round(r["affinity_mean"], 3),
                 affinity_std=round(r["affinity_std"], 3),
                 affinity_seed0=(
-                    round(r["affinity_seed0"], 3)
-                    if r.get("affinity_seed0") is not None
-                    else None
+                    round(r["affinity_seed0"], 3) if r.get("affinity_seed0") is not None else None
                 ),
-                pose_rmsd_seed=round(r["pose_rmsd_seed"], 3) if r["pose_rmsd_seed"] is not None else None,
+                pose_rmsd_seed=round(r["pose_rmsd_seed"], 3)
+                if r["pose_rmsd_seed"] is not None
+                else None,
                 le=float(effs["le"] or 0.0),
                 sile=float(effs["sile"] or 0.0),
                 lle=float(effs["lle"] or 0.0),
@@ -2413,8 +2513,7 @@ class ScreeningRunner:
             candidates.append(cand)
             self.checkpoint.record_tier3(lig.id, cand.model_dump())
             self._emit_progress(
-                3, "Tier 3: XP Rescoring & Rigor", len(candidates), total,
-                lig.id, t_start
+                3, "Tier 3: XP Rescoring & Rigor", len(candidates), total, lig.id, t_start
             )
 
         if not candidates:
@@ -2433,10 +2532,14 @@ class ScreeningRunner:
             c.is_cluster_rep = False
             cluster_map.setdefault(c.cluster_id, []).append(c)
 
-        for cid, cands in cluster_map.items():
+        for cands in cluster_map.values():
             best = min(
                 cands,
-                key=lambda x: (x.ecr_rank if x.ecr_rank > 0 else 999999, -x.ecr_score, x.affinity_mean),
+                key=lambda x: (
+                    x.ecr_rank if x.ecr_rank > 0 else 999999,
+                    -x.ecr_score,
+                    x.affinity_mean,
+                ),
             )
             best.is_cluster_rep = True
 
@@ -2558,9 +2661,7 @@ class ScreeningRunner:
         n_docking_pool = n_ready + n_aglycone_generated
         tiered = bool(self.config.enable_tiered_funnel)
         if tiered:
-            n_funnel_filtered = max(
-                0, n_docking_pool - n_docked_success - n_dock_failed
-            )
+            n_funnel_filtered = max(0, n_docking_pool - n_docked_success - n_dock_failed)
             n_tier1_filtered = max(0, n_t1_in - n_t1_out)
             n_tier2_filtered = max(0, n_t2_in - n_t2_out)
             # Engine failures already have their own bucket above; keep the tier
@@ -2615,7 +2716,9 @@ class ScreeningRunner:
         conf_path = self.out_dir / "conf.txt"
         box = self.config.box or Box(center=(0.0, 0.0, 0.0), size=(20.0, 20.0, 20.0))
         seed_val = self.config.tier2_seeds[0] if (self.config and self.config.tier2_seeds) else 42
-        workers_val = getattr(self, "workers", None) or self.config.cpu or max(1, os.cpu_count() or 4)
+        workers_val = (
+            getattr(self, "workers", None) or self.config.cpu or max(1, os.cpu_count() or 4)
+        )
         conf_content = (
             f"center_x = {box.center[0]:.3f}\n"
             f"center_y = {box.center[1]:.3f}\n"
@@ -2659,7 +2762,7 @@ class ScreeningRunner:
                     found_pdbqt = candidate_path
             if found_pdbqt is None:
                 scratch_candidates: list[Path] = []
-                for seed in (self.config.tier2_seeds or [42]):
+                for seed in self.config.tier2_seeds or [42]:
                     scratch_candidates.append(
                         self.out_dir / "tier2" / f"dock_{cid}" / f"seed_{seed}" / "out.pdbqt"
                     )
@@ -2709,19 +2812,19 @@ class ScreeningRunner:
                 restored = restore_pose_mol_with_template(
                     pose_mol,
                     c.smiles or None,
-                    reference_pose_path=(
-                        lig_item.pdbqt_path if lig_item is not None else None
-                    ),
+                    reference_pose_path=(lig_item.pdbqt_path if lig_item is not None else None),
                 )
                 if restored is not None and restored.GetNumConformers() > 0:
                     pose_dest_sdf.write_text(Chem.MolToMolBlock(restored), encoding="utf-8")
                 else:
                     log.warning("Could not write a conformer for %s (no usable pose)", cid)
-            except Exception as exc:  # noqa: BLE001 - delivery is best effort
+            except Exception as exc:  # 降级兜底 - delivery is best effort
                 log.warning("Failed to export pose SDF for %s: %s", cid, exc)
 
         log.info(
             "Screening report finalized: %d final candidates. Conserved: %s. Output: %s",
-            len(candidates), report.is_conserved, self.out_dir
+            len(candidates),
+            report.is_conserved,
+            self.out_dir,
         )
         return report

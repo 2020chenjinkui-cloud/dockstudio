@@ -6,7 +6,7 @@ and virtual screening enrichment analytics (BEDROC, AUROC, EF1%, EF5%)."""
 from __future__ import annotations
 
 import math
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 import numpy as np
 from rdkit import Chem, DataStructs
@@ -17,17 +17,15 @@ from rdkit.ML.Scoring import Scoring
 
 try:
     from scipy.stats import rankdata
+
     _HAS_SCIPY = True
 except ImportError:
     _HAS_SCIPY = False
 
-if TYPE_CHECKING:
-    from ..models import ScreeningCandidateRow
-
-
 # ---------------------------------------------------------------------------
 # 1. Ligand Efficiency Metrics (LE, SILE, LLE)
 # ---------------------------------------------------------------------------
+
 
 def compute_ligand_efficiencies(
     affinity: float,
@@ -56,7 +54,7 @@ def compute_ligand_efficiencies(
         sile = 0.0
     else:
         le = round(-affinity / num_heavy_atoms, 4)
-        sile = round(-affinity / (num_heavy_atoms ** 0.3), 4)
+        sile = round(-affinity / (num_heavy_atoms**0.3), 4)
 
     pkd = -affinity / 1.364
     if clogp is not None and not math.isnan(clogp):
@@ -390,9 +388,7 @@ def _polar_hydrogen_rotamers(mol: Chem.Mol) -> list[tuple[int, int, int]]:
         donor = neighbours[0]
         if donor.GetAtomicNum() not in _POLAR_DONOR_ELEMENTS:
             continue
-        heavy_neighbours = sorted(
-            n.GetIdx() for n in donor.GetNeighbors() if n.GetAtomicNum() > 1
-        )
+        heavy_neighbours = sorted(n.GetIdx() for n in donor.GetNeighbors() if n.GetAtomicNum() > 1)
         if not heavy_neighbours:
             continue
         rotamers.append((atom.GetIdx(), donor.GetIdx(), heavy_neighbours[0]))
@@ -509,9 +505,7 @@ def _optimise_docked_hydrogen_network(
         best_scan_energy = None
         best_scan_pos = start_pos
         for step in range(1, _STRAIN_H_ROTAMER_STEPS + 1):
-            position = _rotate_point_about_axis(
-                start_pos, origin, axis, step * step_angle
-            )
+            position = _rotate_point_about_axis(start_pos, origin, axis, step * step_angle)
             conf.SetAtomPosition(h_idx, position.tolist())
             try:
                 scan_energy = float(ff.CalcEnergy())
@@ -746,8 +740,7 @@ def compute_internal_strain_energy(
     # cannot come from the same force field/topology (e.g. the caller mixed
     # an MMFF baseline with a UFF pose). Clamping keeps ΔE >= 0 and makes
     # the max(0, ...) semantics explicit.
-    if baseline > e_docked:
-        baseline = e_docked
+    baseline = min(baseline, e_docked)
 
     return compute_internal_strain_energy_penalty(
         docked_energy=e_docked,
@@ -764,6 +757,7 @@ evaluate_docked_strain = compute_internal_strain_energy
 # ---------------------------------------------------------------------------
 # 3. Multi-Seed Convergence Evaluation
 # ---------------------------------------------------------------------------
+
 
 def compute_multiseed_convergence(
     poses: list[Chem.Mol],
@@ -825,6 +819,7 @@ def compute_multiseed_convergence(
 # ---------------------------------------------------------------------------
 # 4. Exponential Consensus Ranking (ECR)
 # ---------------------------------------------------------------------------
+
 
 def _rank_array(arr: np.ndarray, higher_is_better: bool) -> np.ndarray:
     """Computes 1-based fractional ranks for an array using average ties."""
@@ -952,6 +947,7 @@ compute_ecr_consensus = compute_exponential_consensus_ranking
 # ---------------------------------------------------------------------------
 # 5. Bemis-Murcko Scaffold Butina Diversity Clustering
 # ---------------------------------------------------------------------------
+
 
 def extract_murcko_scaffold(mol: Chem.Mol | None, generic: bool = False) -> str:
     """Extracts the Bemis-Murcko scaffold from an RDKit Mol and returns its canonical SMILES.
@@ -1086,14 +1082,15 @@ def assign_clusters_to_candidates(
                 cand["cluster_id"] = c_id
                 cand["is_cluster_rep"] = is_rep
             else:
-                setattr(cand, "cluster_id", c_id)
-                setattr(cand, "is_cluster_rep", is_rep)
+                cand.cluster_id = c_id
+                cand.is_cluster_rep = is_rep
     return cluster_ids, rep_indices
 
 
 # ---------------------------------------------------------------------------
 # 6. Virtual Screening Enrichment Analytics
 # ---------------------------------------------------------------------------
+
 
 def compute_enrichment_metrics(
     scores: list[float] | None = None,
@@ -1166,7 +1163,9 @@ def compute_enrichment_metrics(
     n_total = len(scores)
 
     if candidates is not None and (n_actives == 0 or n_actives == n_total):
-        raise ValueError("At least one active and one inactive candidate required for enrichment metrics")
+        raise ValueError(
+            "At least one active and one inactive candidate required for enrichment metrics"
+        )
 
     if n_actives == 0:
         return {

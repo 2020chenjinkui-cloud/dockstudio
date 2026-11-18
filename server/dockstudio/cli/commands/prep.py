@@ -22,16 +22,23 @@ def run_prep_receptor_interactive(pdb_path: Path | None = None) -> tuple[Path, A
     out_dir = settings.prepared_dir / "receptors"
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    with console.status(f"[bold #93A5FF]正在准备受体: {pdb_path.name} (加氢、去杂原子)...[/bold #93A5FF]"):
+    with console.status(
+        f"[bold #93A5FF]正在准备受体: {pdb_path.name} (加氢、去杂原子)...[/bold #93A5FF]"
+    ):
         receptor = prepare_receptor(pdb_path.read_bytes(), pdb_path.name, out_dir)
 
     content = Text()
     content.append(f"✓ 受体文件: {pdb_path.name}\n", style="bold #4EBA65")
     content.append(f"• 生成 PDBQT: {Path(receptor.pdbqt_path).name}\n", style="#FFFFFF")
-    content.append(f"• 包含多肽链: {', '.join(receptor.chains) if receptor.chains else '单链'}\n", style="#999999")
+    content.append(
+        f"• 包含多肽链: {', '.join(receptor.chains) if receptor.chains else '单链'}\n",
+        style="#999999",
+    )
 
     if receptor.cocrystal_ligands:
-        content.append(f"\n检测到 {len(receptor.cocrystal_ligands)} 个共晶小分子配体:\n", style="bold #D77757")
+        content.append(
+            f"\n检测到 {len(receptor.cocrystal_ligands)} 个共晶小分子配体:\n", style="bold #D77757"
+        )
         for idx, c in enumerate(receptor.cocrystal_ligands):
             cx, cy, cz = c.center
             content.append(
@@ -52,10 +59,13 @@ def run_prep_receptor_interactive(pdb_path: Path | None = None) -> tuple[Path, A
 
 def run_prep_ligand_interactive() -> tuple[str, Any]:
     """Interactive ligand preparation wizard."""
-    mode = select_one("选择配体输入方式:", [
-        ("输入 SMILES 字符串", "粘贴或输入单个分子的标准 SMILES"),
-        ("指定配体文件路径 (SDF / MOL2)", "从本地已有 2D/3D 配体文件准备"),
-    ])
+    mode = select_one(
+        "选择配体输入方式:",
+        [
+            ("输入 SMILES 字符串", "粘贴或输入单个分子的标准 SMILES"),
+            ("指定配体文件路径 (SDF / MOL2)", "从本地已有 2D/3D 配体文件准备"),
+        ],
+    )
 
     settings = get_settings()
     out_dir = settings.prepared_dir / "ligands"
@@ -64,15 +74,24 @@ def run_prep_ligand_interactive() -> tuple[str, Any]:
     if mode == 0:
         from prompt_toolkit import prompt
         from prompt_toolkit.formatted_text import HTML
-        
+
         smiles = prompt(HTML("<ansicyan>请输入配体 SMILES:</ansicyan> ")).strip()
-        name = prompt(HTML("<ansibrightblack>配体名称 (可选，回车默认 ligand):</ansibrightblack> ")).strip() or "ligand"
-        
-        with console.status(f"[bold #93A5FF]正在由 SMILES 构建 3D 构象并质子化 (pH 7.4): {name}...[/bold #93A5FF]"):
+        name = (
+            prompt(
+                HTML("<ansibrightblack>配体名称 (可选，回车默认 ligand):</ansibrightblack> ")
+            ).strip()
+            or "ligand"
+        )
+
+        with console.status(
+            f"[bold #93A5FF]正在由 SMILES 构建 3D 构象并质子化 (pH 7.4): {name}...[/bold #93A5FF]"
+        ):
             ligand = prepare_ligand_from_smiles(smiles, name, out_dir)
     else:
         lig_path = prompt_path("请指定配体文件路径 (SDF / MOL2)")
-        with console.status(f"[bold #93A5FF]正在解析配体文件并加氢转 PDBQT: {lig_path.name}...[/bold #93A5FF]"):
+        with console.status(
+            f"[bold #93A5FF]正在解析配体文件并加氢转 PDBQT: {lig_path.name}...[/bold #93A5FF]"
+        ):
             ligand = prepare_ligand_from_file(lig_path, out_dir)
 
     content = Text()
