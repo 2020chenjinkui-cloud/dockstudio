@@ -1267,9 +1267,13 @@ class ScreeningRunner:
         # Ligands abandoned because of a hard abort (never scored, never
         # checkpointed): reported so an aborted run cannot look complete.
         self._aborted_ids: set[str] = set()
-        # Tier-1 pass list of the current run (used to attribute a cancel to the
-        # right funnel stage when computing the tier detail rows).
-        self._tier1_passed_set: set[str] = set()
+        # Per-tier failure attribution: how many dock failures happened *inside*
+        # each tier.  A failed ligand has no usable affinity and therefore also
+        # drops out of that tier's output count, so deriving the tier loss from
+        # (in - out) alone would count it twice - once in dock_failed, again in
+        # tier1/tier2_filtered - and make a completed run report is_conserved=False
+        # and /verify T5 FAIL (t15-F1).
+        self._tier_failed: dict[int, int] = {1: 0, 2: 0, 3: 0}
         # Per-tier truncation: tier -> ligand ids that *entered* that tier but
         # were never evaluated because a cooperative cancel cut it short.  They
         # already carry a checkpoint record from an earlier tier, so
@@ -1451,6 +1455,21 @@ class ScreeningRunner:
             ", ..." if len(missing) > 5 else "",
         )
 
+    def abort_accounting(self) -> dict[str, list[str]]:
+        """The truncation / failure buckets as *ids*, not counts.
+
+        A scalar ``is_conserved`` cannot express "these two buckets are disjoint",
+        yet a molecule occupying both is exactly the double-counting bug class this
+        area keeps producing (t12-F2, t15-F1).  Exposing the ids lets a caller (and
+        the tests) assert the stronger invariant.  Deliberately kept off
+        ``ScreeningFunnelReport`` so the report schema does not change for a
+        diagnostic aid.
+        """
+        return {
+            "aborted": sorted(self._aborted_ids),
+            "failed": sorted(self._dock_failed_ids),
+        }
+
     def _abandoned_ligand_ids(self) -> list[str]:
         """Ligands that were never docked and never checkpointed.
 
@@ -1588,7 +1607,7 @@ class ScreeningRunner:
         self._hard_abort = None
         self._aborted_ids.clear()
         self._tier_truncated = {1: set(), 2: set(), 3: set()}
-        self._tier1_passed_set.clear()
+        self._tier_failed = {1: 0, 2: 0, 3: 0}
 
         log.info(
             "Starting screening run in %s (engine=%s, resume=%s, tiered=%s)",
@@ -1632,7 +1651,6 @@ class ScreeningRunner:
         # -------------------------------------------------------------------
         tier1_candidates = self._run_tier1(checkpoint_state.get(1, {}))
         self.tier1_passed_ids = [r["ligand"].id for r in tier1_candidates]
-        self._tier1_passed_set = set(self.tier1_passed_ids)
         n_tier1_in = len(self.ligand_dict)
         n_tier1_out = len(tier1_candidates)
 
@@ -2047,6 +2065,7 @@ class ScreeningRunner:
             else:
                 self._run_tier1_workers(pending_items, tier1_dir, tier1_results, total, t_start)
         self._record_tier_truncation(1, pending_ids, {r["ligand"].id for r in tier1_results})
+        self._tier_failed[1] = len(self._dock_failed_ids)
 
         # 3. Filter and sort by SILE
         valid = [r for r in tier1_results if r["affinity"] < 900.0]
@@ -2293,6 +2312,8 @@ class ScreeningRunner:
                 )
 
         self._record_tier_truncation(2, pending_ids, {r["ligand"].id for r in tier2_results})
+        # Failures attributable to tier 2 = total so far minus tier 1's own count.
+        self._tier_failed[2] = len(self._dock_failed_ids) - self._tier_failed[1]
 
         # 3. Convergence & Strain QC filtering (strict: no "pad up to 3" back door)
         converged = [
@@ -2934,6 +2955,7 @@ class ScreeningRunner:
         # rejections are three *distinct* quantities - never a single fudge factor.
         n_aglycone_generated = max(0, len(self.ligand_dict) - n_ready)
         n_dock_failed = len(self._dock_failed_ids)
+        n_docking_pool = n_ready + n_aglycone_generated
         # Molecules the run never got to (hard abort tore it down, or the caller
         # asked us to stop), plus molecules that *entered* a tier but never left
         # it because a cooperative cancel cut that tier short.  Neither is
@@ -2949,11 +2971,46 @@ class ScreeningRunner:
             dict.fromkeys(list(self._abandoned_ligand_ids()) + sorted(truncated_ids))
         )
         self._aborted_ids.update(abandoned_ids)
+        n_abandoned = len(abandoned_ids)
         tiered = bool(self.config.enable_tiered_funnel)
         if tiered:
-            n_tier1_filtered = max(0, n_t1_in - n_t1_out - len(self._tier_truncated.get(1, ())))
-            n_tier2_filtered = max(0, n_t2_in - n_t2_out - len(self._tier_truncated.get(2, ())))
+            # Each tier's loss = (entered - left) - truncation - *failures that
+            # happened inside this tier*.  The failure term is what keeps a failed
+            # molecule from being counted both here and in n_dock_failed (t15-F1);
+            # without it a perfectly normal completed run reports is_conserved=False
+            # and /verify T5 FAILs.
+            n_tier1_filtered = max(
+                0,
+                n_t1_in
+                - n_t1_out
+                - len(self._tier_truncated.get(1, ()))
+                - self._tier_failed.get(1, 0),
+            )
+            n_tier2_filtered = max(
+                0,
+                n_t2_in
+                - n_t2_out
+                - len(self._tier_truncated.get(2, ()))
+                - self._tier_failed.get(2, 0),
+            )
             n_funnel_filtered = n_tier1_filtered + n_tier2_filtered
+            # Guard the disjointness invariant explicitly: filtered + failed +
+            # aborted + success must never exceed the pool.  A violation means a
+            # molecule sits in two buckets, which is exactly the bug class this
+            # area keeps producing, so say so loudly instead of shipping a report
+            # that merely looks plausible.
+            accounted = n_funnel_filtered + n_dock_failed + n_abandoned + n_docked_success
+            if accounted > n_docking_pool:
+                log.error(
+                    "Funnel buckets overlap: filtered=%d + failed=%d + aborted=%d + "
+                    "success=%d = %d > pool=%d",
+                    n_funnel_filtered,
+                    n_dock_failed,
+                    n_abandoned,
+                    n_docked_success,
+                    accounted,
+                    n_docking_pool,
+                )
         else:
             # Single-tier mode performs no ratio cut-off: nothing may be reported as
             # funnel-filtered (keeps dock_failed=1 / docked_success=9 semantics).

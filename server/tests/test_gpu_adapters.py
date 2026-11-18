@@ -194,8 +194,13 @@ def test_gnina_mock_binary_e2e(tmp_path: Path, monkeypatch) -> None:
             DockParams(exhaustiveness=2, num_modes=2, seed=42),
             work,
         )
-    except Exception as exc:
-        pytest.skip(f"python-script stub not executable on this host: {exc}")
+    except OSError as exc:
+        # T15-F4: only a *launch* failure (ENOEXEC / EACCES / ENOENT) means "this
+        # host cannot run a script stub" - that is a skip.  Anything else is a real
+        # failure of the code under test and must surface as such, not be relabelled
+        # as "not applicable here" (which is the same disease as the swallowed
+        # aborts this round is about).
+        pytest.skip(f"host cannot launch a script stub: {exc}")
     assert result is not None
     assert result.poses[0].affinity == pytest.approx(-9.5)
     assert "CNNscore" in result.log

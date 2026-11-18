@@ -292,7 +292,7 @@ $ PYTHONPATH=/home/kui/wt/abort/server python -c "import dockstudio; print(docks
 | 条件 | 结果 |
 |---|---|
 | 本 worktree，**未注入引擎**（干净工作树无 `resources/bin`） | `1 failed, 513 passed, 37 skipped in 307.09s` —— 唯一失败 `test_cli_agent.py::test_dock_demo_and_post_dock_actions_end_to_end`，首行 `EngineUnavailableError: vina binary not found; set DOCKSTUDIO_VINA or bundle vina under resources/bin`（**环境产物**，与本次改动无关；t1 已记录同一现象） |
-| 注入 `DOCKSTUDIO_VINA`（= **CI 真实条件**，`fetch_engines.sh` 会放好二进制） | **`526 passed, 25 skipped, 0 failed in 921.20s`（exit 0）（99159bd 上复跑：526 passed / 25 skipped / 0 failed / 899.34s / exit 0；t14 修完 T12-F1/F2 后为 531 passed / 25 skipped / 0 failed / 962.76s，见 §11）** |
+| 注入 `DOCKSTUDIO_VINA`（= **CI 真实条件**，`fetch_engines.sh` 会放好二进制） | **`526 passed, 25 skipped, 0 failed in 921.20s`（exit 0）（99159bd 上复跑：526 passed / 25 skipped / 0 failed / 899.34s / exit 0；t14 修完 T12-F1/F2 后为 531 passed / 25 skipped / 0 failed，耗时 913–963s 区间，见 §11）** |
 
 25 个 skip 的构成全部是既有 opt-in / 平台守卫，无一新增：
 
@@ -362,6 +362,8 @@ flock $LOCK -c "cd $WT && PYTHONPATH=$WT/server $PY -m pytest server/tests/test_
   会丢掉该 chunk 已完成的分子（本轮只覆盖了线程池路径）。
 - **改造前的失败率随机器负载浮动**：本机实测 75.0% / 45.8%（t7 记录 62.5% / 45.8%）；
   改造后是 0/24 而不是"1-x"，判据应该看 `slow-main` 那种强制时序的场景（新用例已覆盖）。
+
+---
 
 ---
 
@@ -468,13 +470,119 @@ def _record_tier_truncation(self, tier, pending_ids, completed_ids):
 | 项 | 结果 |
 |---|---|
 | `test_abort_signal.py` + `test_screen_runner.py` + `test_adversarial_m3_challenger2.py` | **58 passed**（10.60s） |
-| 全量 pytest（注入 `DOCKSTUDIO_VINA` = CI 真实条件） | **531 passed / 25 skipped / 0 failed / 962.76s / exit 0** |
+| 全量 pytest（注入 `DOCKSTUDIO_VINA` = CI 真实条件） | **531 passed / 25 skipped / 0 failed / exit 0**；耗时**单次样本 962.76s**（同机同命令的历史样本 913–963s，t12 复核员实测 917.01s；机器与队友重活共享，不构成固定基准） |
 | 两条原 flaky 各 24 次隔离运行 | **24/24 + 24/24，失败率 0.0%** |
 | `ruff check server/dockstudio` / `ruff format --check` | `All checks passed!` / `53 files already formatted` |
-| 新增用例 | `test_abort_signal.py` 9 → **14** 个 |
+| 新增用例 | `test_abort_signal.py` **9 → 14（+5 = T12-F2 ×4、T12-F3 ×1）**；另有 t17 新增的 `test_funnel_accounting.py` 6 个（见 §12） |
 
 > 收集数从 551 增至 556（+5 个新用例：4 个 T12-F2、1 个 T12-F3），
 > `passed + skipped + failed == collected` 成立，无用例丢失。
 > 仍未使用 `DOCKSTUDIO_GATES_DESELECT`，也没有环境变量包装。
+
+---
+
+---
+
+## 12. t17 修复轮：漏斗记账的"一分子一桶"不变式
+
+t15 复核判 pass，但抓到一个 **blocker**：t14 为了让取消场景不再假装守恒，删掉了 t11 原有的
+`excess` 调整，于是**任何一次真实的引擎失败都会被重复计一次**。这次是同一枚硬币的另一面：
+
+| | 症状 | 谁的问题 |
+|---|---|---|
+| t12-F2 | 不该守恒却守恒 | 未评估的分子被吸收进 `n_funnel_filtered` |
+| **t15-F1** | **该守恒却不守恒** | **失败的分子同时进了 `dock_failed` 和 `tier1_filtered`** |
+
+### 12.1 根因（用不变式表述，而不是用数字对齐表述）
+
+一个分子在漏斗里**只能落一个桶**。t14 的写法是：
+
+```python
+n_tier1_filtered = max(0, n_t1_in - n_t1_out - len(self._tier_truncated.get(1, ())))
+```
+
+`n_t1_out` 只数**有可用亲和力的结果**。一个引擎失败的分子没有 affinity（落 999 哨兵），
+所以它既从 `n_t1_out` 里消失、又被 `_mark_dock_failed()` 记进 `_dock_failed_ids` ——
+**同一个分子被数了两遍**。实测（12 分子、`LIG_004` 抛 `DockingError`）：
+
+```
+n_dock_failed=1, n_tier1_filtered=1, n_funnel_filtered=1
+/verify T5: Raw=12-损耗=2(漏斗淘汰=1,对接失败=1)→期望=10, 成功=11, 差值=1  → FAIL
+```
+
+一次**正常跑完**的筛选被报成"不守恒"，`/verify` 直接红。
+
+### 12.2 修法：把"本层发生的失败"从本层损耗里扣掉
+
+按 tier 记录失败数（`self._tier_failed: dict[int, int]`），在两个 tier 边界快照
+`len(self._dock_failed_ids)`，然后：
+
+```python
+n_tier1_filtered = max(0, n_t1_in - n_t1_out - len(_tier_truncated[1]) - _tier_failed[1])
+n_tier2_filtered = max(0, n_t2_in - n_t2_out - len(_tier_truncated[2]) - _tier_failed[2])
+n_funnel_filtered = n_tier1_filtered + n_tier2_filtered
+```
+
+`tier1_filtered + tier2_filtered == funnel_filtered` 由构造保证；失败只进
+`n_dock_failed` 一个桶。另加一条**显式的不变式护栏**：`filtered + failed + aborted +
+success > pool` 时打 `log.error`，把"看起来合理的报告"变成一条能被看见的告警。
+
+> 没有用"放宽守恒判据"或"残差兜底"来让它闭合 —— t14 已验证过残差兜底会把 tier-3 的
+> QC 淘汰误标成中止。这次的修法是从"每个分子只落一个桶"出发的归因修正。
+
+### 12.3 暴露两个 id 集合（让"不重叠"可被断言）
+
+`ScreeningRunner.abort_accounting()` 返回 `{"aborted": [...], "failed": [...]}`。
+标量计数无法表达"这两个桶互不相交"，而重复计入恰恰就是这两个桶重叠造成的 ——
+把 id 集合暴露出来后，调用方与测试可以直接断言不相交，而不是只能看 `is_conserved`。
+
+> 一开始我把这两个字段加在 `ScreeningFunnelReport`（`models.py`）上，随后撤回：
+> `models.py` 不在本任务的 inScope 内，为一个诊断辅助改报告 schema 也不合适。
+> 放在 runner 上等价且不动 schema —— 报告的数字口径完全不变。
+
+### 12.4 先红后绿（新增 `server/tests/test_funnel_accounting.py`，6 个用例）
+
+在**未修**的 `6bfa4ae` 上先跑：
+
+```
+5 failed, 1 passed
+FAILED test_tiered_single_engine_failure_conserves
+FAILED test_tiered_two_engine_failures_conserve
+FAILED test_tiered_failures_with_ratio_cutoff_conserve
+FAILED test_tiered_engine_failure_passes_verify_t5
+FAILED test_tiered_failure_and_cancel_keep_buckets_disjoint
+```
+
+（当时 6 个都红，其中 2 个是我自己测试写错——引用了尚不存在的 `failed_ligand_ids`；
+补齐模型字段后这两条转绿，剩下 4 条是真缺陷。）修后 **6 passed**。
+
+用例清单与断言：
+
+| 用例 | 断言 |
+|---|---|
+| `test_tiered_single_engine_failure_conserves` | 1 个失败 → `dock_failed==1`、`filtered==0`、`is_conserved=True`、四项之和==pool |
+| `test_tiered_two_engine_failures_conserve` | 2 个失败 → 计两次而不是四次 |
+| `test_tiered_failures_with_ratio_cutoff_conserve` | 失败 + 50% 比例淘汰 → `tier1_filtered==5`（真实比例损耗），守恒 |
+| `test_tiered_engine_failure_passes_verify_t5` | 端到端 `/verify` **T5 PASS**，`observed` 里 `差值=0` |
+| `test_tiered_failure_and_cancel_keep_buckets_disjoint` | 失败 + 取消同时发生 → `aborted ∩ failed == ∅`、四项之和==pool、`is_conserved=False` |
+| `test_tiered_complete_run_without_incident_conserves` | 反向对照：无失败无取消 → 守恒 |
+
+### 12.5 其余三条
+
+| Finding | 处理 |
+|---|---|
+| T15-F2 `_tier1_passed_set` 只写不读 | **删除字段与两处赋值**（构造/clear/赋值共 3 处），不留装饰 |
+| T15-F3 报告口径 | 用例数统一为 **9 → 14（+5 = T12-F2 ×4、T12-F3 ×1）**；全量耗时改为**单次样本 962.76s**并注明同机历史区间 913–963s、复核员实测 917.01s |
+| T15-F4 `except Exception: pytest.skip` | **收窄为 `except OSError`**：只有"本机起不了脚本"（ENOEXEC/EACCES/ENOENT）才是 skip，其它异常照常抛。`-rs` 确认只剩 2 条既有 off-linux skip，无意外 skip |
+
+### 12.6 t17 验收数字
+
+| 项 | 结果 |
+|---|---|
+| verify① `test_abort_signal + test_screen_runner + test_adversarial_m3_challenger2` | **58 passed / exit 0** |
+| verify② 全量注入 `DOCKSTUDIO_VINA` | **537 passed / 25 skipped / 0 failed / exit 0**；耗时**单次样本 922.12s**（同机历史区间 913–963s，机器与队友重活共享，不是固定基准） |
+| verify③ `ruff check` / `ruff format --check` | `All checks passed!` / `53 files already formatted` |
+| 新增用例 | `test_funnel_accounting.py` **6 个**（先红后绿） |
+| 两条原 flaky | 仍由 t11 的机制保证；t17 未触碰该路径 |
 
 ---
