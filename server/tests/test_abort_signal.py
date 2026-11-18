@@ -428,3 +428,142 @@ def test_tiered_abort_then_resume_reaches_full_completion(tmp_path: Path) -> Non
     tier1_phase2 = {lid for lid, exh in engine2.call_details if exh == 4}
     assert "LIG_001" not in tier1_phase2, sorted(tier1_phase2)
     assert "LIG_002" not in tier1_phase2, sorted(tier1_phase2)
+
+
+# ---------------------------------------------------------------------------
+# 5. T12-F2: a cooperative cancel must not close the funnel identity
+# ---------------------------------------------------------------------------
+
+
+def _funnel(out_dir: Path) -> dict:
+    path = out_dir / "funnel.csv"
+    return load_funnel_data(path) if path.is_file() else {}
+
+
+def _cancel_during_tier(
+    tmp_path: Path, tier: int, *, n_ligands: int = 12, keep: tuple[float, float] = (1.0, 1.0)
+) -> tuple[ScreeningRunner, object, Path]:
+    """Run a tiered screening and cancel once the given tier reports progress."""
+    prep_lib, _ = _make_library(tmp_path, n_ligands)
+    engine = RecordingEngine()
+    runner = ScreeningRunner(
+        config=ScreeningConfig(
+            enable_tiered_funnel=True,
+            cpu=2,
+            tier1_keep_ratio=keep[0],
+            tier2_keep_ratio=keep[1],
+        ),
+        out_dir=tmp_path / "run",
+        receptor_pdbqt=_make_receptor(tmp_path),
+        prepared_library=prep_lib,
+        engine=engine,
+        cpu_per_job=2,
+    )
+    original_emit = ScreeningRunner._emit_progress
+    state = {"seen": 0}
+
+    def emit_then_cancel(self, t, stage, current, total, lig_id, t_start):
+        result = original_emit(self, t, stage, current, total, lig_id, t_start)
+        if t == tier:
+            state["seen"] += 1
+            if state["seen"] >= 1:
+                self.cancel()
+        return result
+
+    ScreeningRunner._emit_progress = emit_then_cancel
+    try:
+        report = runner.run(resume=False)
+    finally:
+        ScreeningRunner._emit_progress = original_emit
+    return runner, report, tmp_path / "run"
+
+
+def test_cancel_during_tier3_does_not_claim_conservation(tmp_path: Path) -> None:
+    """t12-F2 regression: all docking done, tier 3 cut short.
+
+    Before the fix every molecule was already checkpointed, so
+    ``_abandoned_ligand_ids()`` returned 0, the unevaluated tier-3 inputs were
+    absorbed by ``n_funnel_filtered`` and the report closed
+    (measured: candidates=1, funnel_filtered=11, is_conserved=True, no `aborted`
+    row).  A run that produced 1 of 12 candidates must not claim conservation.
+    """
+    _, report, out_dir = _cancel_during_tier(tmp_path, tier=3)
+
+    assert len(report.candidates) < 12, "the cancel did not actually truncate the run"
+    funnel = _funnel(out_dir)
+    assert funnel.get("aborted", 0) > 0, f"no 'aborted' row: {funnel}"
+    assert report.is_conserved is False, (
+        f"truncated tier-3 run must not close the identity: "
+        f"candidates={len(report.candidates)}, "
+        f"funnel_filtered={report.n_funnel_filtered}, aborted={funnel.get('aborted')}"
+    )
+    # The unevaluated molecules are truncation, not "threshold rejections".
+    assert report.n_funnel_filtered == 0, funnel
+
+
+def test_cancel_during_tier2_does_not_claim_conservation(tmp_path: Path) -> None:
+    """Same contract one tier up, where a ratio cut-off is also in play."""
+    _, report, out_dir = _cancel_during_tier(tmp_path, tier=2, keep=(0.5, 1.0))
+
+    funnel = _funnel(out_dir)
+    assert funnel.get("aborted", 0) > 0, f"no 'aborted' row: {funnel}"
+    assert report.is_conserved is False, funnel
+    # tier1_filtered must reflect only the real ratio rejection (12 -> 6), not the
+    # molecules the cancel dropped.
+    assert funnel.get("tier1_filtered") == 6, funnel
+
+
+def test_cancel_accounting_balances(tmp_path: Path) -> None:
+    """aborted + filtered + failed + success must account for the whole pool."""
+    _, report, out_dir = _cancel_during_tier(tmp_path, tier=3, keep=(0.5, 1.0))
+    funnel = _funnel(out_dir)
+
+    accounted = (
+        funnel.get("funnel_filtered", 0)
+        + funnel.get("dock_failed", 0)
+        + funnel.get("docked_success", 0)
+        + funnel.get("aborted", 0)
+    )
+    assert accounted == funnel.get("raw", 0), funnel
+    assert report.is_conserved is False
+
+
+def test_complete_run_still_conserves(tmp_path: Path) -> None:
+    """No cancel => the identity must still close (no over-eager truncation)."""
+    prep_lib, _ = _make_library(tmp_path, 8)
+    runner = ScreeningRunner(
+        config=ScreeningConfig(enable_tiered_funnel=True, cpu=2),
+        out_dir=tmp_path / "run",
+        receptor_pdbqt=_make_receptor(tmp_path),
+        prepared_library=prep_lib,
+        engine=RecordingEngine(),
+        cpu_per_job=2,
+    )
+    report = runner.run(resume=False)
+
+    funnel = _funnel(tmp_path / "run")
+    assert "aborted" not in funnel, f"complete run must not report truncation: {funnel}"
+    assert report.is_conserved is True, funnel
+
+
+# ---------------------------------------------------------------------------
+# 6. T12-F3: an aborted run must not leave the previous run's package behind
+# ---------------------------------------------------------------------------
+
+
+def test_hard_abort_removes_stale_delivery_files(tmp_path: Path) -> None:
+    """Reusing --out after a crash must not show the earlier, complete package."""
+    out_dir = tmp_path / "run"
+    out_dir.mkdir(parents=True)
+    (out_dir / "funnel.csv").write_text("raw,5\ndocked_success,5\n", encoding="utf-8")
+    (out_dir / "screening_results.csv").write_text("Ligand\nLIG_001\n", encoding="utf-8")
+
+    engine = RecordingEngine(abort_on="LIG_002")
+    runner, _ = _runner(tmp_path, engine, n_ligands=5, out_dir=out_dir)
+    with pytest.raises(KeyboardInterrupt):
+        runner.run(resume=False)
+
+    assert not (out_dir / "funnel.csv").exists(), "stale funnel.csv survived the abort"
+    assert not (out_dir / "screening_results.csv").exists(), (
+        "stale screening_results.csv survived the abort"
+    )

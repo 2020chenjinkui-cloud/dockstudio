@@ -129,6 +129,13 @@ def test_gnina_parse_garbage_raises(tmp_path: Path) -> None:
         parse_gnina_out(out, "nothing")
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason=(
+        "T12-F1: fake-gnina stub is a #!<python> script; Windows CreateProcess "
+        "cannot execute it (no shell, shebang ignored). Covered on Linux/macOS."
+    ),
+)
 def test_gnina_mock_binary_e2e(tmp_path: Path, monkeypatch) -> None:
     """Whole dock() flow with a fake gnina shell script binary."""
     # T9-F1: a Python stub with an "env python" shebang instead of a /bin/sh
@@ -187,8 +194,13 @@ def test_gnina_mock_binary_e2e(tmp_path: Path, monkeypatch) -> None:
             DockParams(exhaustiveness=2, num_modes=2, seed=42),
             work,
         )
-    except Exception as exc:  # noqa: BLE001
-        pytest.skip(f"python-script stub not executable on this host: {exc}")
+    except OSError as exc:
+        # T15-F4: only a *launch* failure (ENOEXEC / EACCES / ENOENT) means "this
+        # host cannot run a script stub" - that is a skip.  Anything else is a real
+        # failure of the code under test and must surface as such, not be relabelled
+        # as "not applicable here" (which is the same disease as the swallowed
+        # aborts this round is about).
+        pytest.skip(f"host cannot launch a script stub: {exc}")
     assert result is not None
     assert result.poses[0].affinity == pytest.approx(-9.5)
     assert "CNNscore" in result.log
@@ -223,4 +235,3 @@ def test_unidock_build_batch_cmd() -> None:
     assert "--out" not in cmd
     assert "--cpu" not in cmd
     assert "--energy_range" not in cmd
-
