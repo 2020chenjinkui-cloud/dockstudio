@@ -137,6 +137,21 @@ print("gnina v1.3.3 (stub)")
 """
 
 
+# T12-F1: Windows ``CreateProcess`` has no shell and ignores the shebang, so a
+# ``#!<python>`` script cannot be launched as a program - measured on Linux by
+# stripping the shebang (the kernel answers ENOEXEC, exactly like Windows), which
+# makes the five stub-executing tests below fail.  They are skipped there instead
+# of pretending the stub is portable.  The staging / guard / parsing logic that
+# does *not* spawn a process keeps running on every platform.
+_NEEDS_EXECUTABLE_STUB = pytest.mark.skipif(
+    sys.platform == "win32",
+    reason=(
+        "T12-F1: the gnina stub is a #!<python> script; Windows CreateProcess cannot "
+        "execute it (no shell, shebang ignored). Covered on Linux/macOS instead."
+    ),
+)
+
+
 def _fake_gnina(tmp_path: Path, *, cnn: bool = True, name: str = "fake_gnina") -> Path:
     """Cross-platform stand-in for the gnina binary that validates its input.
 
@@ -151,9 +166,7 @@ def _fake_gnina(tmp_path: Path, *, cnn: bool = True, name: str = "fake_gnina") -
     """
     script = tmp_path / name
     script.write_text(
-        _FAKE_GNINA_PY.replace("__CNN__", repr(cnn)).replace(
-            "__INTERPRETER__", sys.executable
-        ),
+        _FAKE_GNINA_PY.replace("__CNN__", repr(cnn)).replace("__INTERPRETER__", sys.executable),
         encoding="utf-8",
     )
     script.chmod(0o755)
@@ -196,6 +209,7 @@ def test_sdf_pose_keeps_its_extension_when_staged(tmp_path: Path) -> None:
     assert staged.read_text(encoding="utf-8") == SDF_POSE
 
 
+@_NEEDS_EXECUTABLE_STUB
 def test_in_place_rescore_accepts_an_exported_sdf_pose(
     staged_engine: GninaEngine, tmp_path: Path
 ) -> None:
@@ -222,6 +236,7 @@ def test_in_place_rescore_accepts_an_exported_sdf_pose(
     assert "ligand.pdbqt" not in argv, argv
 
 
+@_NEEDS_EXECUTABLE_STUB
 def test_multimodel_out_pdbqt_is_reduced_to_one_model(
     staged_engine: GninaEngine, tmp_path: Path
 ) -> None:
@@ -277,6 +292,7 @@ def test_staging_never_rewrites_the_callers_file(tmp_path: Path) -> None:
     assert staged.read_text(encoding="utf-8").count("MODEL") == 1
 
 
+@_NEEDS_EXECUTABLE_STUB
 def test_empty_receptor_is_rejected_before_launching(
     staged_engine: GninaEngine, tmp_path: Path
 ) -> None:
@@ -301,6 +317,7 @@ def test_empty_receptor_is_rejected_before_launching(
     assert not (tmp_path / "run" / "out.pdbqt").exists()
 
 
+@_NEEDS_EXECUTABLE_STUB
 def test_receptor_with_atoms_is_accepted(staged_engine: GninaEngine, tmp_path: Path) -> None:
     """The guard must not over-reject a usable receptor."""
     receptor, ligand = _inputs(tmp_path)
@@ -315,6 +332,7 @@ def test_receptor_with_atoms_is_accepted(staged_engine: GninaEngine, tmp_path: P
 # ---------------------------------------------------------------------------
 
 
+@_NEEDS_EXECUTABLE_STUB
 def test_cnn_missing_result_carries_a_degradation_marker(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -508,9 +526,9 @@ def test_tier3_candidate_carries_cnn_missing_marker(
     )
     candidates = runner._run_tier3([item], {})
 
-    assert any(a.startswith(f"{GNINA_CNN_MISSING}:") for a in candidates[0].alerts), (
-        candidates[0].alerts
-    )
+    assert any(a.startswith(f"{GNINA_CNN_MISSING}:") for a in candidates[0].alerts), candidates[
+        0
+    ].alerts
 
 
 def test_marker_helper_is_csv_safe() -> None:

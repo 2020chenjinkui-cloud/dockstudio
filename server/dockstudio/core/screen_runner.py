@@ -1267,6 +1267,15 @@ class ScreeningRunner:
         # Ligands abandoned because of a hard abort (never scored, never
         # checkpointed): reported so an aborted run cannot look complete.
         self._aborted_ids: set[str] = set()
+        # Tier-1 pass list of the current run (used to attribute a cancel to the
+        # right funnel stage when computing the tier detail rows).
+        self._tier1_passed_set: set[str] = set()
+        # Per-tier truncation: tier -> ligand ids that *entered* that tier but
+        # were never evaluated because a cooperative cancel cut it short.  They
+        # already carry a checkpoint record from an earlier tier, so
+        # _abandoned_ligand_ids() cannot see them - and without this the report
+        # absorbed them into n_funnel_filtered and closed (T12-F2).
+        self._tier_truncated: dict[int, set[str]] = {1: set(), 2: set(), 3: set()}
 
         # Tracking state
         self.tier1_passed_ids: list[str] = []
@@ -1371,6 +1380,14 @@ class ScreeningRunner:
         if ligand_id is not None:
             self._aborted_ids.add(str(ligand_id))
         log.warning("Hard abort captured (%s) on %s", type(exc).__name__, ligand_id or "<run>")
+        # T12-F3: reusing --out after a crash must not leave the previous run's
+        # delivery package behind - a stale funnel.csv / screening_results.csv next
+        # to an aborted run reads as "this run finished".
+        for stale in (self.out_dir / "funnel.csv", self.out_dir / "screening_results.csv"):
+            try:
+                stale.unlink(missing_ok=True)
+            except OSError as unlink_exc:  # read-only dir: the abort itself still wins
+                log.warning("Could not remove stale delivery file %s: %s", stale, unlink_exc)
 
     def _raise_pending_abort(self) -> None:
         """Re-raise a captured hard abort (order-independent), else return.
@@ -1406,6 +1423,33 @@ class ScreeningRunner:
                 raise KeyboardInterrupt(str(getattr(exc, "args", ("aborted",))[0])) from None
         if self._cancel_requested:
             raise _CooperativeCancel()
+
+    def _record_tier_truncation(
+        self, tier: int, pending_ids: list[str], completed_ids: set[str]
+    ) -> None:
+        """Remember ligands ``tier`` never evaluated because a cancel cut it short.
+
+        Only meaningful when ``_cancel_requested`` is set.  The molecules usually
+        already have a checkpoint record from an *earlier* tier, so
+        ``_abandoned_ligand_ids()`` counts them as "processed" and the truncation
+        used to disappear into ``n_funnel_filtered`` - i.e. the report closed and
+        looked complete (T12-F2).  Recording it per tier is what lets the funnel
+        rows attribute the loss to the right stage instead of inventing
+        "threshold rejections" that never happened.
+        """
+        if not self._cancel_requested:
+            return
+        missing = {str(i) for i in pending_ids if str(i) not in completed_ids}
+        if not missing:
+            return
+        self._tier_truncated.setdefault(tier, set()).update(missing)
+        log.warning(
+            "Cooperative cancel left %d ligand(s) unevaluated in tier %d: %s%s",
+            len(missing),
+            tier,
+            ", ".join(sorted(missing)[:5]),
+            ", ..." if len(missing) > 5 else "",
+        )
 
     def _abandoned_ligand_ids(self) -> list[str]:
         """Ligands that were never docked and never checkpointed.
@@ -1543,6 +1587,8 @@ class ScreeningRunner:
         self._cancel_requested = False
         self._hard_abort = None
         self._aborted_ids.clear()
+        self._tier_truncated = {1: set(), 2: set(), 3: set()}
+        self._tier1_passed_set.clear()
 
         log.info(
             "Starting screening run in %s (engine=%s, resume=%s, tiered=%s)",
@@ -1586,10 +1632,15 @@ class ScreeningRunner:
         # -------------------------------------------------------------------
         tier1_candidates = self._run_tier1(checkpoint_state.get(1, {}))
         self.tier1_passed_ids = [r["ligand"].id for r in tier1_candidates]
+        self._tier1_passed_set = set(self.tier1_passed_ids)
         n_tier1_in = len(self.ligand_dict)
         n_tier1_out = len(tier1_candidates)
 
         if not tier1_candidates or self._cancel_requested:
+            # A cancel here also truncates tier 2: these survivors were selected but
+            # never evaluated.  Record it so the funnel cannot claim they were
+            # "filtered" (T12-F2).
+            self._record_tier_truncation(2, self.tier1_passed_ids, set())
             return self._finalize_report(
                 n_raw,
                 n_desalt,
@@ -1615,6 +1666,7 @@ class ScreeningRunner:
         n_tier2_out = len(tier2_candidates)
 
         if not tier2_candidates or self._cancel_requested:
+            self._record_tier_truncation(3, self.tier2_passed_ids, set())
             return self._finalize_report(
                 n_raw,
                 n_desalt,
@@ -1988,11 +2040,13 @@ class ScreeningRunner:
         )
 
         # 2. Dock pending items
+        pending_ids = [lig.id for lig in pending_items]
         if pending_items and not self._cancel_requested:
             if self._engine_has_native_batch():
                 self._run_tier1_batch(pending_items, tier1_dir, tier1_results, total, t_start)
             else:
                 self._run_tier1_workers(pending_items, tier1_dir, tier1_results, total, t_start)
+        self._record_tier_truncation(1, pending_ids, {r["ligand"].id for r in tier1_results})
 
         # 3. Filter and sort by SILE
         valid = [r for r in tier1_results if r["affinity"] < 900.0]
@@ -2224,6 +2278,7 @@ class ScreeningRunner:
         )
 
         # 2. Multi-seed docking for pending items (native GPU batching or CPU pool)
+        pending_ids = [row["ligand"].id for row in pending_items]
         if pending_items and not self._cancel_requested:
             if self._engine_has_native_batch():
                 self._run_tier2_batch(
@@ -2236,6 +2291,8 @@ class ScreeningRunner:
                 self._run_tier2_workers(
                     pending_items, tier2_dir, tier2_results, total, t_start, box, seeds, cpu_per_job
                 )
+
+        self._record_tier_truncation(2, pending_ids, {r["ligand"].id for r in tier2_results})
 
         # 3. Convergence & Strain QC filtering (strict: no "pad up to 3" back door)
         converged = [
@@ -2600,6 +2657,7 @@ class ScreeningRunner:
                 log.warning("Tier 3: GNINA availability probe failed: %s", exc)
 
         # 2. Evaluate rigor properties on pending items
+        pending_ids = [r["ligand"].id for r in pending_items]
         for r in pending_items:
             if self._cancel_requested:
                 break
@@ -2728,6 +2786,8 @@ class ScreeningRunner:
             self._emit_progress(
                 3, "Tier 3: XP Rescoring & Rigor", len(candidates), total, lig.id, t_start
             )
+
+        self._record_tier_truncation(3, pending_ids, {c.ligand_id for c in candidates})
 
         if not candidates:
             return []
@@ -2874,30 +2934,26 @@ class ScreeningRunner:
         # rejections are three *distinct* quantities - never a single fudge factor.
         n_aglycone_generated = max(0, len(self.ligand_dict) - n_ready)
         n_dock_failed = len(self._dock_failed_ids)
-        n_docking_pool = n_ready + n_aglycone_generated
         # Molecules the run never got to (hard abort tore it down, or the caller
-        # asked us to stop).  They are NOT "filtered by a threshold": laundering
-        # them into n_funnel_filtered is exactly how a truncated run ended up
-        # closing the T5 identity and looking like a complete one.
-        abandoned_ids = self._abandoned_ligand_ids()
+        # asked us to stop), plus molecules that *entered* a tier but never left
+        # it because a cooperative cancel cut that tier short.  Neither is
+        # "filtered by a threshold": laundering them into n_funnel_filtered is
+        # exactly how a truncated run closed the T5 identity and looked complete
+        # (T12-F2).  Attribution is explicit per tier - no residual guessing,
+        # because a residual would relabel legitimate tier-3 QC rejections as
+        # "aborted" and make a complete run look cancelled.
+        truncated_ids: set[str] = set()
+        for ids in self._tier_truncated.values():
+            truncated_ids.update(ids)
+        abandoned_ids = list(
+            dict.fromkeys(list(self._abandoned_ligand_ids()) + sorted(truncated_ids))
+        )
         self._aborted_ids.update(abandoned_ids)
-        n_abandoned = len(abandoned_ids)
         tiered = bool(self.config.enable_tiered_funnel)
         if tiered:
-            n_funnel_filtered = max(
-                0, n_docking_pool - n_docked_success - n_dock_failed - n_abandoned
-            )
-            n_tier1_filtered = max(0, n_t1_in - n_t1_out - min(n_abandoned, n_t1_in - n_t1_out))
-            n_tier2_filtered = max(0, n_t2_in - n_t2_out)
-            # Engine failures already have their own bucket above; keep the tier
-            # detail rows free of them so that (tier1 + tier2) == funnel_filtered.
-            excess = (n_tier1_filtered + n_tier2_filtered) - n_funnel_filtered
-            if excess > 0:
-                taken = min(excess, n_tier2_filtered)
-                n_tier2_filtered -= taken
-                excess -= taken
-                if excess > 0:
-                    n_tier1_filtered = max(0, n_tier1_filtered - excess)
+            n_tier1_filtered = max(0, n_t1_in - n_t1_out - len(self._tier_truncated.get(1, ())))
+            n_tier2_filtered = max(0, n_t2_in - n_t2_out - len(self._tier_truncated.get(2, ())))
+            n_funnel_filtered = n_tier1_filtered + n_tier2_filtered
         else:
             # Single-tier mode performs no ratio cut-off: nothing may be reported as
             # funnel-filtered (keeps dock_failed=1 / docked_success=9 semantics).
