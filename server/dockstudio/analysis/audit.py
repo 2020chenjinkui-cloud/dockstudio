@@ -8,6 +8,7 @@ from pathlib import Path
 
 from ..core.events import sha256_file
 from ..models import DockResult, Job
+from .crystal import METRIC_LABELS_ZH, CrystalPoseRmsd
 
 _DISCLAIMER = (
     "对接打分（kcal/mol）是经验打分函数的相对排序指标，不是实验结合亲和力实测值；"
@@ -24,6 +25,8 @@ def build_audit_markdown(
     events: list[dict],
     input_hashes: dict | None = None,
     project_name: str = "",
+    crystal_reference: str | None = None,
+    crystal_rmsd_series: dict[int, CrystalPoseRmsd] | None = None,
 ) -> str:
     """事理链 Markdown：何时何地 -> 输入 -> 环境指纹 -> 参数 -> 结果 -> 事件序列."""
     parts: list[str] = []
@@ -86,6 +89,38 @@ def build_audit_markdown(
             ub = f"{p.rmsd_ub:.2f}" if p.rmsd_ub is not None else "—"
             parts.append(f"| {p.index} | {p.affinity:.2f} | {lb} | {ub} |\n")
 
+    parts.append(_hline("共晶配体自对接对照 (D9)"))
+    if not crystal_reference:
+        parts.append("- 无共晶配体或参考 SDF 缺失，D9 不适用（SKIP）\n")
+    elif not crystal_rmsd_series:
+        parts.append(f"- 参考配体: `{crystal_reference}`；姿态文件缺失，无法计算（SKIP）\n")
+    else:
+        parts.append(f"- 参考配体: `{crystal_reference}`\n")
+        parts.append(
+            "- 判据口径: `inplace_calc_rms`"
+            "（rdMolAlign.CalcRMS，不叠合）\n"
+            "- 辅助口径: `superposed_best_rms`"
+            "（rdMolAlign.GetBestRMS，先叠合；对刚体位移不敏感，不可作为 D9 结论）\n"
+            "- 阈值: ≤ 2.0 Å\n"
+        )
+        parts.append("| # | 原位 RMSD (Å) | D9 | 叠合 RMSD (Å，辅助) |\n")
+        parts.append("|---|---|---|---|\n")
+        for idx in sorted(crystal_rmsd_series):
+            r = crystal_rmsd_series[idx]
+            inplace = f"{r.inplace_rmsd:.3f}" if r.inplace_rmsd is not None else "—"
+            superposed = f"{r.superposed_rmsd:.3f}" if r.superposed_rmsd is not None else "—"
+            parts.append(f"| {idx} | {inplace} | {r.d9_status()} | {superposed} |\n")
+        best = min(
+            (r for r in crystal_rmsd_series.values() if r.inplace_rmsd is not None),
+            key=lambda r: r.inplace_rmsd,
+            default=None,
+        )
+        if best is not None:
+            parts.append(
+                f"- best-of-{len(crystal_rmsd_series)}（按 D9 原位口径）: "
+                f"**{best.inplace_rmsd:.3f} Å** → {best.d9_status()}\n"
+            )
+
     parts.append(_hline("事件序列"))
     if not events:
         parts.append("- （该项目尚无 job 相关事件）\n")
@@ -119,6 +154,8 @@ def build_audit_zip(
     project_name: str = "",
     input_hashes: dict | None = None,
     prepared: dict | None = None,
+    crystal_reference: str | None = None,
+    crystal_rmsd_series: dict[int, CrystalPoseRmsd] | None = None,
 ) -> Path:
     """Pack snapshot.json + events.jsonl + engine.log + artifacts + report.md."""
     snapshot = {
@@ -127,7 +164,23 @@ def build_audit_zip(
     }
     if prepared:
         snapshot["prepared"] = prepared
-    report_md = build_audit_markdown(job, events, input_hashes, project_name)
+    if crystal_rmsd_series:
+        snapshot["cocrystal_rmsd"] = {
+            "reference": crystal_reference,
+            "criterion_metric": "inplace_calc_rms",
+            "auxiliary_metric": "superposed_best_rms",
+            "threshold_a": 2.0,
+            "metric_labels": METRIC_LABELS_ZH,
+            "poses": {str(idx): r.as_dict() for idx, r in sorted(crystal_rmsd_series.items())},
+        }
+    report_md = build_audit_markdown(
+        job,
+        events,
+        input_hashes,
+        project_name,
+        crystal_reference=crystal_reference,
+        crystal_rmsd_series=crystal_rmsd_series,
+    )
     job_dir = Path(job.result.run_dir) if job.result else None
 
     with zipfile.ZipFile(out_path, "w", zipfile.ZIP_DEFLATED) as zf:

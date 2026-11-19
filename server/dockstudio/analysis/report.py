@@ -11,8 +11,23 @@ from pathlib import Path
 
 from .. import __version__
 from ..models import DockJobRequest, DockResult, Interaction, PoseAnalysis, Project
+from .crystal import (
+    D9_THRESHOLD_A,
+    INPLACE_METRIC,
+    METRIC_LABELS_ZH,
+    SUPERPOSED_METRIC,
+    CrystalPoseRmsd,
+)
 
-ALL_SECTIONS = ("snapshot", "scores", "interactions", "diagram", "viewer3d", "disclaimer")
+ALL_SECTIONS = (
+    "snapshot",
+    "redocking",
+    "scores",
+    "interactions",
+    "diagram",
+    "viewer3d",
+    "disclaimer",
+)
 
 
 def _esc(text: object) -> str:
@@ -97,6 +112,68 @@ def _inline_file(path: Path) -> str:
         return ""
 
 
+def _redocking_html(
+    reference: str | None,
+    series: dict[int, CrystalPoseRmsd] | None,
+) -> str:
+    """D9 block: the in-place verdict per pose, with the auxiliary metric beside it.
+
+    Both numbers are always labelled with the function that produced them, so a
+    reader cannot mistake the superimpose-first value for the verdict.
+    """
+    if not reference:
+        return (
+            "<h2>共晶配体自对接对照（D9）</h2>\n"
+            '<p class="muted">该受体没有可用的共晶配体，D9 不适用（SKIP）。</p>\n'
+        )
+    if not series:
+        return (
+            "<h2>共晶配体自对接对照（D9）</h2>\n"
+            f'<p class="muted">参考配体 {_esc(reference)}，但姿态文件缺失，无法计算（SKIP）。</p>\n'
+        )
+
+    rows = []
+    for idx in sorted(series):
+        r = series[idx]
+        verdict = r.d9_status()
+        badge = {"PASS": "✅ PASS", "FAIL": "❌ FAIL", "SKIP": "— SKIP"}[verdict]
+        rows.append(
+            "<tr>"
+            f"<td>{idx}</td>"
+            f"<td><b>{_fmt(r.inplace_rmsd, 3)}</b></td>"
+            f"<td>{badge}</td>"
+            f'<td class="muted">{_fmt(r.superposed_rmsd, 3)}</td>'
+            "</tr>"
+        )
+    rows_html = "\n".join(rows)
+    best = min(
+        (r for r in series.values() if r.inplace_rmsd is not None),
+        key=lambda r: r.inplace_rmsd,
+        default=None,
+    )
+    best_line = (
+        f"<p>best-of-{len(series)}（按 D9 原位口径取最优）：<b>{_fmt(best.inplace_rmsd, 3)} Å</b>"
+        f" → {best.d9_status()}</p>\n"
+        if best is not None
+        else ""
+    )
+    return (
+        "<h2>共晶配体自对接对照（D9）</h2>\n"
+        "<table>\n"
+        '<tr><th style="width:auto"># 姿态</th>'
+        '<th style="width:auto">原位 RMSD (Å)</th>'
+        f'<th style="width:auto">D9 判定 (≤ {D9_THRESHOLD_A:.1f} Å)</th>'
+        '<th style="width:auto">叠合 RMSD (Å，辅助)</th></tr>\n'
+        f"{rows_html}\n</table>\n"
+        f"{best_line}"
+        f'<p class="muted">参考配体：{_esc(reference)}。判据口径 <code>{_esc(INPLACE_METRIC)}</code>'
+        f"（{_esc(METRIC_LABELS_ZH[INPLACE_METRIC])}，rdMolAlign.CalcRMS，不叠合）；"
+        f"辅助口径 <code>{_esc(SUPERPOSED_METRIC)}</code>"
+        f"（{_esc(METRIC_LABELS_ZH[SUPERPOSED_METRIC])}，rdMolAlign.GetBestRMS）"
+        "对刚体位移不敏感，不可用作 D9 结论。</p>\n"
+    )
+
+
 def generate_report(
     project: Project,
     request: DockJobRequest,
@@ -109,6 +186,8 @@ def generate_report(
     sections: list[str] | None = None,
     title: str | None = None,
     diagram_svg: str = "",
+    crystal_reference: str | None = None,
+    crystal_rmsd_series: dict[int, CrystalPoseRmsd] | None = None,
 ) -> str:
     """Render a self-contained HTML report (structures inlined as text).
 
@@ -144,6 +223,10 @@ def generate_report(
         f"<tr><th>{_esc(k)}</th><td>{_esc(v)}</td></tr>" for k, v in snapshot_rows
     )
     NOW_TAG = datetime.now().strftime("%Y-%m-%d %H:%M")
+
+    redocking_block = ""
+    if "redocking" in want:
+        redocking_block = _redocking_html(crystal_reference, crystal_rmsd_series)
 
     snapshot_block = ""
     if "snapshot" in want:
@@ -240,6 +323,7 @@ def generate_report(
 <h1>{_esc(report_title)}</h1>
 
 {snapshot_block}
+{redocking_block}
 {scores_block}
 {interactions_block}
 {diagram_block}

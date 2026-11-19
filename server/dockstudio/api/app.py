@@ -84,6 +84,33 @@ class FlexRequest(BaseModel):
     flex_residues: list[str]
 
 
+class CrystalRmsdResponse(BaseModel):
+    """One docked pose measured against the co-crystal ligand.
+
+    ``rmsd`` is the **D9 number**: symmetry-corrected *in-place* RMSD
+    (``rdMolAlign.CalcRMS``, probe not moved) — "is the pose still at the
+    crystal ligand's site?".  ``rmsd_superposed`` is the auxiliary
+    superimpose-first value (``rdMolAlign.GetBestRMS``), which answers the
+    different question "does the pose reproduce the crystal conformation?"
+    and is blind to rigid-body drift, so it must never be read as the verdict.
+    """
+
+    pose_index: int
+    #: D9 verdict metric — in-place, symmetry-corrected (Å).
+    rmsd: float | None = None
+    #: Identifier of the function that produced `rmsd` (see analysis.crystal).
+    metric: str = "inplace_calc_rms"
+    #: Auxiliary superimpose-first RMSD (Å); diagnostic only.
+    rmsd_superposed: float | None = None
+    #: Identifier of the function that produced `rmsd_superposed`.
+    metric_superposed: str = "superposed_best_rms"
+    #: D9 threshold applied to `rmsd` (Å).
+    threshold_a: float = 2.0
+    #: "PASS" / "FAIL" / "SKIP" — `rmsd` against `threshold_a`.
+    d9_status: str = "SKIP"
+    reference: str | None = None
+
+
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024  # 50 MB
 
 
@@ -583,6 +610,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 path=str(store.job_dir(job.project_id, job.id).parent.parent),
                 created_at=datetime.now(),
             )
+        crystal_reference, crystal_series = _job_cocrystal_rmsd_series(job)
         report_html = generate_report(
             project=project,
             request=job.request,
@@ -595,6 +623,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             sections=selected,
             title=title,
             diagram_svg=diagram_svg,
+            crystal_reference=crystal_reference,
+            crystal_rmsd_series=crystal_series,
         )
         return HTMLResponse(
             report_html,
@@ -786,6 +816,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "receptor": receptor.model_dump(mode="json") if receptor is not None else None,
             "ligand": ligand.model_dump(mode="json") if ligand is not None else None,
         }
+        crystal_reference, crystal_series = _job_cocrystal_rmsd_series(job)
         zip_path = store.job_dir(job.project_id, job.id) / "audit.zip"
         build_audit_zip(
             job,
@@ -795,6 +826,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             project_name=(project.name if project else job.project_id),
             input_hashes=input_hashes,
             prepared=prepared,
+            crystal_reference=crystal_reference,
+            crystal_rmsd_series=crystal_series,
         )
         return Response(
             zip_path.read_bytes(),
@@ -889,6 +922,27 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             )
         return {"name": "demo-library", "items": items}
 
+    def _job_cocrystal_rmsd_series(job: Job) -> tuple[str | None, dict | None]:
+        """Co-crystal reference + per-pose D9 measurements for this job.
+
+        Returns ``(reference, series)``; either half may be ``None`` when the
+        receptor has no co-crystal ligand.  Both metric flavours are computed
+        in one pass so the report and the audit bundle can never disagree.
+        """
+        from ..analysis.crystal import cocrystal_reference, pose_rmsd_series
+
+        receptor = registry.receptors.get(job.request.receptor_id)
+        if receptor is None:
+            return None, None
+        reference, sdf_path = cocrystal_reference(Path(receptor.pdbqt_path).parent)
+        if reference is None or sdf_path is None:
+            return reference, None
+        try:
+            return reference, pose_rmsd_series(sdf_path, _job_pose_paths(job))
+        except Exception as exc:  # 降级兜底
+            log.warning("co-crystal RMSD series failed for job %s: %s", job.id, exc)
+            return reference, None
+
     def _job_cocrystal_meta(job: Job) -> list[dict]:
         receptor = registry.receptors.get(job.request.receptor_id)
         if receptor is None:
@@ -916,7 +970,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/api/jobs/{jid}/crystal_rmsd")
     def crystal_rmsd(jid: str, pose_index: int = Query(default=1, ge=1)):
-        from ..models import CrystalRmsd
+        CrystalRmsd = CrystalRmsdResponse
 
         job = runner.get_job(jid)
         if job is None:
@@ -924,17 +978,28 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         pose_paths = _job_pose_paths(job)
         if not (1 <= pose_index <= len(pose_paths)):
             return _error(404, f"pose {pose_index} 不存在")
-        meta = _job_cocrystal_meta(job)
-        if not meta:
-            return CrystalRmsd(pose_index=pose_index, rmsd=None, reference=None)
-        reference = f"{meta[0]['resname']}:{meta[0]['chain']}"
-        sdf_path = Path(meta[0]["sdf_path"])
-        if not sdf_path.is_file():
-            return CrystalRmsd(pose_index=pose_index, rmsd=None, reference=reference)
-        from ..analysis.crystal import heavy_atom_rmsd
+        # One reader for the co-crystal reference, shared with the report and the
+        # audit bundle (analysis.crystal.cocrystal_reference), so the three
+        # consumers can never disagree about which file is the D9 reference.
+        from ..analysis.crystal import cocrystal_reference, crystal_pose_rmsd
 
-        rmsd = heavy_atom_rmsd(sdf_path, pose_paths[pose_index - 1])
-        return CrystalRmsd(pose_index=pose_index, rmsd=rmsd, reference=reference)
+        receptor = registry.receptors.get(job.request.receptor_id)
+        reference, sdf_path = (None, None)
+        if receptor is not None:
+            reference, sdf_path = cocrystal_reference(Path(receptor.pdbqt_path).parent)
+        if sdf_path is None:
+            return CrystalRmsd(pose_index=pose_index, rmsd=None, reference=reference)
+        measured = crystal_pose_rmsd(sdf_path, pose_paths[pose_index - 1])
+        return CrystalRmsd(
+            pose_index=pose_index,
+            rmsd=measured.inplace_rmsd,
+            metric=measured.metric,
+            rmsd_superposed=measured.superposed_rmsd,
+            metric_superposed=measured.auxiliary_metric,
+            threshold_a=measured.threshold_a,
+            d9_status=measured.d9_status(),
+            reference=reference,
+        )
 
     # ------------------------------------------------------------- M1: WebSocket
 
