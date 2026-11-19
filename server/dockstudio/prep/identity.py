@@ -47,7 +47,7 @@ log = get_logger("prep.identity")
 #: Marker used in InChIKey stereo blocks when the molecule has defined stereo.
 _STEREO_UNDEFINED = "UHFFFAOYSA"
 
-IdentityLevel = Literal["exact", "skeleton", "mismatch"]
+IdentityLevel = Literal["exact", "skeleton", "mismatch", "unverified"]
 
 
 def inchikey_layers(inchikey: str | None) -> tuple[str, str]:
@@ -136,6 +136,25 @@ def compare_inchikeys(
             warning="无法生成 InChIKey，不能判定配体与共晶配体是否为同一化学个体。",
         )
 
+    if not reference_stereo_known:
+        # A bond-order-free reference has no trustworthy InChIKey: InChI assigns
+        # bond orders, so its skeleton hash describes a different (saturated)
+        # molecule.  Saying "mismatch" would be a false alarm and "skeleton"
+        # would claim evidence we do not have, so refuse to judge.
+        return _verdict(
+            match=False,
+            level="unverified",
+            ligand_inchikey=ligand_inchikey,
+            reference_inchikey=reference_inchikey,
+            reference_stereo_known=False,
+            ligand_stereo_defined=lig_defined,
+            warning=(
+                "共晶配体参考无键级（来自 PDB HETATM 抽取），其 InChIKey "
+                f"{reference_inchikey} 描述的是饱和骨架而非真实配体，无法据此判定身份。"
+                "请同时提供该共晶配体的立体 SMILES（cocrystal_smiles）作为参考。"
+            ),
+        )
+
     if lig_skel != ref_skel:
         return _verdict(
             match=False,
@@ -187,21 +206,6 @@ def compare_inchikeys(
                 "两者是立体异构体（非对映体/对映体），不是同一化学个体。"
             ),
         )
-
-    # Reference stereo is unknown (bond-order-free SDF): skeleton is all we can prove.
-    return _verdict(
-        match=False,
-        level="skeleton",
-        ligand_inchikey=ligand_inchikey,
-        reference_inchikey=reference_inchikey,
-        reference_stereo_known=False,
-        ligand_stereo_defined=lig_defined,
-        warning=(
-            f"共晶配体参考（{reference_inchikey}）来自无键级结构，只能证明骨架一致"
-            f"（{lig_skel}），无法核对立体化学；若要作为 redocking 判据，"
-            "请同时提供共晶配体的立体 SMILES 作为参考。"
-        ),
-    )
 
 
 def check_ligand_identity(

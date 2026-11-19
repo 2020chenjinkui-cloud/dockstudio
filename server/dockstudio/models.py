@@ -128,10 +128,14 @@ class LigandIdentity(BaseModel):
     * ``skeleton`` — only constitution agrees; stereo is unproven (the ligand has
       undefined stereo, or the reference cannot express it).
     * ``mismatch`` — different molecule.
+    * ``unverified`` — the reference cannot support a verdict at all (e.g. a
+      bond-order-free PDB ``HETATM`` extraction, whose InChIKey describes a
+      saturated skeleton rather than the real ligand).  Supply a curated
+      ``cocrystal_smiles`` to get a real answer.
     """
 
     match: bool
-    level: Literal["exact", "skeleton", "mismatch"]
+    level: Literal["exact", "skeleton", "mismatch", "unverified"]
     #: InChIKey of the ligand that was prepared.
     ligand_inchikey: str | None = None
     #: InChIKey of the co-crystal reference.
