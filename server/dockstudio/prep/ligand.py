@@ -11,7 +11,8 @@ from rdkit import Chem
 from rdkit.Chem import AllChem
 
 from ..logging import get_logger
-from ..models import LigandQCProfile, PreparationError, PreparedLigand
+from ..models import LigandIdentity, LigandQCProfile, PreparationError, PreparedLigand
+from .identity import check_ligand_against_cocrystal, check_ligand_identity
 from .tcm import (
     desalt_and_filter,
     generate_conformers_and_min_energy,
@@ -96,6 +97,37 @@ def _mol_to_pdbqt(mol: Chem.Mol, name: str) -> str:
     return pdbqt
 
 
+def _check_identity(
+    mol: Chem.Mol,
+    cocrystal_sdf: Path | None,
+    cocrystal_smiles: str | None,
+) -> LigandIdentity | None:
+    """Compare a prepared molecule with a co-crystal reference (None when absent).
+
+    Failures are logged and downgraded to ``None`` rather than aborting the
+    preparation: a missing identity check must not stop a user from docking,
+    but it must never be silent either.
+    """
+    if cocrystal_sdf is None and not cocrystal_smiles:
+        return None
+    try:
+        if cocrystal_smiles:
+            verdict = check_ligand_identity(mol, cocrystal_smiles)
+        else:
+            verdict = check_ligand_against_cocrystal(mol, Path(cocrystal_sdf))
+    except Exception as exc:  # 降级兜底
+        log.warning("ligand/co-crystal identity check failed: %s", exc)
+        return None
+    if not verdict.match:
+        log.warning(
+            "配体身份校验未通过（%s / %s）：%s",
+            verdict.level,
+            verdict.ligand_inchikey,
+            verdict.warning,
+        )
+    return verdict
+
+
 def _write_ligand(
     mol: Chem.Mol,
     source: Literal["file", "smiles"],
@@ -106,6 +138,7 @@ def _write_ligand(
     derivative_type: Literal["original", "aglycone", "stereoisomer"] = "original",
     parent_id: str | None = None,
     ligand_id: str | None = None,
+    identity: LigandIdentity | None = None,
 ) -> PreparedLigand:
     lid = ligand_id or uuid.uuid4().hex[:8]
     lig_dir = out_dir / lid
@@ -125,6 +158,7 @@ def _write_ligand(
         min_energy_kcal=min_energy_kcal,
         derivative_type=derivative_type,
         parent_id=parent_id,
+        identity=identity,
     )
 
 
@@ -137,10 +171,19 @@ def prepare_ligand_from_smiles(
     ligand_id: str | None = None,
     min_heavy: int = 3,
     max_heavy: int = 120,
+    cocrystal_sdf: Path | None = None,
+    cocrystal_smiles: str | None = None,
 ) -> PreparedLigand:
     """Build a ligand PDBQT from a SMILES string with intelligent desalting,
     elemental/size filtering, MMFF94s conformer ensemble energy baseline,
-    and PAINS/TCM risk profile."""
+    and PAINS/TCM risk profile.
+
+    When ``cocrystal_sdf`` (or a curated ``cocrystal_smiles``) is given, the
+    prepared molecule is compared against that co-crystal reference and the
+    verdict is returned on ``PreparedLigand.identity``.  Preparation is the only
+    moment the comparison is meaningful: a SMILES without ``@``/``@@`` does not
+    name a stereoisomer until conformer generation picks one.
+    """
     smiles = (smiles or "").strip()
     if not smiles:
         raise PreparationError("SMILES 字符串为空，请粘贴有效的 SMILES。")
@@ -169,6 +212,8 @@ def prepare_ligand_from_smiles(
     mol_3d, min_energy = generate_conformers_and_min_energy(clean_mol)
     qc_profile.min_energy_kcal = min_energy
 
+    identity = _check_identity(mol_3d, cocrystal_sdf, cocrystal_smiles)
+
     return _write_ligand(
         mol_3d,
         source="smiles",
@@ -179,6 +224,7 @@ def prepare_ligand_from_smiles(
         derivative_type=derivative_type,
         parent_id=parent_id,
         ligand_id=ligand_id,
+        identity=identity,
     )
 
 

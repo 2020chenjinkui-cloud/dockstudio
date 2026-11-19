@@ -116,6 +116,41 @@ class LigandQCProfile(BaseModel):
             self.pass_all = False
 
 
+class LigandIdentity(BaseModel):
+    """Is this ligand the same chemical individual as the co-crystal reference?
+
+    Redocking only means something when the answer is yes, and it routinely is
+    not: a SMILES without ``@``/``@@`` descriptors has no defined stereochemistry,
+    so conformer generation picks an arbitrary stereoisomer.  The check is layered
+    because each layer proves a different amount:
+
+    * ``exact``    — InChIKey skeleton **and** stereo layer agree: same molecule.
+    * ``skeleton`` — only constitution agrees; stereo is unproven (the ligand has
+      undefined stereo, or the reference cannot express it).
+    * ``mismatch`` — different molecule.
+    * ``unverified`` — the reference cannot support a verdict at all (e.g. a
+      bond-order-free PDB ``HETATM`` extraction, whose InChIKey describes a
+      saturated skeleton rather than the real ligand).  Supply a curated
+      ``cocrystal_smiles`` to get a real answer.
+    """
+
+    match: bool
+    level: Literal["exact", "skeleton", "mismatch", "unverified"]
+    #: InChIKey of the ligand that was prepared.
+    ligand_inchikey: str | None = None
+    #: InChIKey of the co-crystal reference.
+    reference_inchikey: str | None = None
+    #: First InChIKey block — the constitution/skeleton hash.
+    ligand_skeleton: str = ""
+    reference_skeleton: str = ""
+    #: False when the ligand declares no stereochemistry at all.
+    ligand_stereo_defined: bool = False
+    #: False when the reference came from a bond-order-free structure.
+    reference_stereo_known: bool = True
+    #: Human-readable explanation (Chinese), set whenever `match` is False.
+    warning: str | None = None
+
+
 class PreparedLigand(BaseModel):
     id: str
     source: Literal["file", "smiles"]
@@ -127,6 +162,8 @@ class PreparedLigand(BaseModel):
     min_energy_kcal: float | None = None
     derivative_type: Literal["original", "aglycone", "stereoisomer"] = "original"
     parent_id: str | None = None
+    #: Verdict of the ligand vs co-crystal comparison, when one was requested.
+    identity: LigandIdentity | None = None
 
 
 class CocrystalLigand(BaseModel):
