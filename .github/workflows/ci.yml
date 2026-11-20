@@ -59,6 +59,8 @@ jobs:
         run: pip install -e "server[dev]"
       - name: Lint
         run: ruff check server/dockstudio
+      - name: Format check
+        run: ruff format --check server/dockstudio
       - name: Test (含真实 vina e2e)
         run: pytest server/tests -q
 
@@ -80,6 +82,8 @@ jobs:
         run: pip install -e "server[dev]"
       - name: Lint
         run: ruff check server/dockstudio
+      - name: Format check
+        run: ruff format --check server/dockstudio
       - name: Test (含真实 vina e2e)
         run: pytest server/tests -q
 

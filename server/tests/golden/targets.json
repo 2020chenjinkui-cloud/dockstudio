@@ -48,12 +48,13 @@
   {
    "pdb_id": "1PPC",
    "ccd": "MID",
-   "smiles": "[H]/N=C(/c1ccc(cc1)C[C@H](C(=O)N2CCCCC2)NC(=O)CNS(=O)(=O)c3ccc4ccccc4c3)\\N",
+   "smiles": "N=C(/c1ccc(cc1)C[C@H](C(=O)N2CCCCC2)NC(=O)CNS(=O)(=O)c3ccc4ccccc4c3)N",
    "top_affinity": -9.21,
    "range": [
     -10.71,
     -7.71
-   ]
+   ],
+   "smiles_note": "explicit-H imine ([H]/N=C ... \\N) removed: same molecule, but the extra explicit atom made the co-crystal template match fail (38 vs 37 atoms)"
   },
   {
    "pdb_id": "1R1H",

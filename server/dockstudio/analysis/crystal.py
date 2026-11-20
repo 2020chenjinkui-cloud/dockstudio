@@ -78,12 +78,30 @@ def _strip_bond_types(mol: Chem.Mol) -> Chem.Mol:
 
 
 def _load_pair(crystal_sdf: Path, pose_sdf: Path) -> tuple[Chem.Mol, Chem.Mol]:
-    """Read both SDFs and reduce them to comparable heavy-atom graphs."""
+    """Read both SDFs and reduce them to comparable heavy-atom graphs.
+
+    ``RemoveHs`` is a no-op while the molecule is unsanitised, and a co-crystal SDF
+    produced by :func:`dockstudio.prep.receptor.restore_cocrystal_bond_orders` has
+    already had its explicit hydrogens stripped, so a raw ``RemoveHs`` here would
+    leave the two sides with different atom counts (1PPC: 37 vs 38) and the
+    substructure match would fail with "No sub-structure match found".  Sanitise a
+    copy first so both sides really are heavy-atom graphs.
+    """
     crystal = _read_sdf(crystal_sdf)
     pose = _read_sdf(pose_sdf)
-    ref = _strip_bond_types(Chem.RemoveHs(crystal))
-    probe = _strip_bond_types(Chem.RemoveHs(pose))
+    ref = _strip_bond_types(_heavy_atom_graph(crystal))
+    probe = _strip_bond_types(_heavy_atom_graph(pose))
     return ref, probe
+
+
+def _heavy_atom_graph(mol: Chem.Mol) -> Chem.Mol:
+    """Drop hydrogens deterministically, regardless of the file's sanitisation state."""
+    if not any(atom.GetAtomicNum() == 1 for atom in mol.GetAtoms()):
+        return Chem.RemoveHs(mol)
+    work = Chem.RWMol(mol)
+    for idx in sorted((a.GetIdx() for a in work.GetAtoms() if a.GetAtomicNum() == 1), reverse=True):
+        work.RemoveAtom(idx)
+    return work.GetMol()
 
 
 @dataclass(frozen=True)

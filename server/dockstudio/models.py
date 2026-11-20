@@ -409,6 +409,11 @@ class PoseCheck(BaseModel):
     ok: bool
     source: str = "posebusters"
     issues: list[PoseCheckIssue] = Field(default_factory=list)
+    #: Why the check had to degrade (e.g. PoseBusters raised), else ``None``.
+    #: ``source="builtin"`` alone cannot distinguish "PoseBusters unavailable on this
+    #: platform" from "PoseBusters ran and failed on this molecule", and reporting the
+    #: latter as a pass is how a 3-rule fallback gets presented as an 18-rule pass.
+    degraded_reason: str | None = None
 
 
 class ComparisonRow(BaseModel):
@@ -571,6 +576,11 @@ class ScreeningFunnelReport(BaseModel):
     thresholds (Tier-1/Tier-2 ratio cut-offs, convergence/strain QC rejection) and
     is deliberately kept separate from ``n_dock_failed`` (engine crashes), so that
     "正常淘汰" and "对接程序失败" never share the same accounting bucket.
+
+    ``n_aborted`` is a fourth bucket: molecules the run never got to because it was
+    cancelled or hard-aborted.  Folding those into ``n_funnel_filtered`` used to make
+    a truncated run look conserved, which is exactly the failure mode this field
+    exists to prevent.
     """
 
     n_raw: int = 0
@@ -591,6 +601,11 @@ class ScreeningFunnelReport(BaseModel):
     n_funnel_filtered: int = 0
     n_dock_failed: int = 0
     n_docked_success: int = 0
+    #: Molecules never evaluated because the run was cancelled or hard-aborted.
+    #: Kept as its own bucket so a truncated run cannot masquerade as a complete one:
+    #: without it, un-evaluated molecules were absorbed into ``n_funnel_filtered``
+    #: (a "threshold rejection" bucket) and the mass balance still closed.
+    n_aborted: int = 0
     funnel_csv_path: str | None = None
     checkpoint_path: str | None = None
     results_csv_path: str | None = None
@@ -606,13 +621,30 @@ class ScreeningFunnelReport(BaseModel):
         return self.n_ready + self.n_aglycone_generated
 
     @property
-    def is_conserved(self) -> bool:
+    def is_balanced(self) -> bool:
+        """Do the books add up?  Pure arithmetic, aborted molecules included.
+
+        A truncated run can be perfectly balanced (every molecule sits in exactly one
+        bucket, some of them ``n_aborted``), so this alone must never be read as "the
+        screening completed".
+        """
         prep_conserved = self.n_raw - self.prep_losses == self.n_ready
         dock_conserved = (
-            self.n_docking_pool - (self.n_dock_failed + self.n_funnel_filtered)
+            self.n_docking_pool - (self.n_dock_failed + self.n_funnel_filtered + self.n_aborted)
             == self.n_docked_success
         )
         return prep_conserved and dock_conserved
+
+    @property
+    def is_conserved(self) -> bool:
+        """Books balance **and** nothing was abandoned -- i.e. a complete run.
+
+        Keeping ``n_aborted`` out of the verdict (while inside :attr:`is_balanced`)
+        is deliberate: folding abandoned molecules back into the balance is how a
+        cancelled run used to look complete, and reporting ``is_conserved=True`` for
+        a truncated screening is exactly the failure this project keeps re-learning.
+        """
+        return self.is_balanced and self.n_aborted == 0
 
     def to_funnel_rows(self) -> list[tuple[str, int]]:
         return [

@@ -24,6 +24,7 @@ from rdkit.Chem.MolStandardize import rdMolStandardize as _rdMolStandardize  # n
 from openbabel import openbabel as ob
 # isort: on
 
+from ..degradation import LEDGER
 from ..logging import get_logger
 from ..models import CocrystalLigand, PreparationError, PreparedReceptor
 
@@ -288,6 +289,12 @@ def restore_cocrystal_bond_orders(sdf_path: Path, smiles: str) -> tuple[Path, st
         raw = _Chem.MolFromMolFile(str(sdf_path), sanitize=False, removeHs=True)
         if raw is None:
             return sdf_path, f"无法读取共晶 SDF: {sdf_path}"
+        # removeHs is a no-op under sanitize=False, so PDB HETATM hydrogens survive.
+        # AssignBondOrdersFromTemplate needs the heavy-atom counts to agree (MIT in
+        # 1ETR: 42 atoms with 7 explicit H vs a 35-heavy-atom template), so strip them
+        # explicitly.  Coordinates of the heavy atoms are untouched.
+        if any(a.GetAtomicNum() == 1 for a in raw.GetAtoms()):
+            raw = _Chem.RemoveHs(raw, sanitize=False)
         fixed = AllChem.AssignBondOrdersFromTemplate(template, raw)
         if fixed is None:
             return sdf_path, "AssignBondOrdersFromTemplate 返回空（SMILES 与坐标不匹配）"
@@ -389,6 +396,11 @@ def prepare_receptor(content: bytes, filename: str, out_dir: Path) -> PreparedRe
                 warnings.append(
                     f"共晶配体 {resname}:{chain} 的 SDF 不含键级（PDB 限制），"
                     "仅可用于几何定位；用于身份/立体化学判定请提供 CCD SMILES"
+                )
+                LEDGER.record(
+                    "COCRYSTAL_BOND_ORDERS",
+                    f"{resname}:{chain} 的 SDF 无键级，化学身份不可靠",
+                    origin="prep.receptor.prepare_receptor",
                 )
         except Exception as exc:  # 降级兜底
             warnings.append(f"共晶配体 {resname}:{chain} SDF 抽取失败: {exc}")

@@ -1976,6 +1976,59 @@ class ScreeningRunner:
             "pose_file": str(pose_file) if pose_file is not None else None,
         }
 
+    def _salvage_batch_results(
+        self,
+        batch_tuples: list[tuple[str, Path]],
+        batch_dir: Path,
+    ) -> dict[str, Any]:
+        """Recover per-ligand results a batch left behind when it crashed mid-chunk.
+
+        ``dock_batch`` writes ``dock_<id>/out.pdbqt`` per ligand as it goes, so a
+        crash after ligand 3 of 10 still leaves three usable poses on disk.  Reading
+        them back keeps the funnel honest (those molecules really were docked) and
+        spares a resume from redoing them.
+
+        Only files that actually parse are returned; anything else is left to the
+        normal ``_mark_dock_failed`` path.
+        """
+        salvaged: dict[str, Any] = {}
+        for lig_id, _ in batch_tuples:
+            pose_dir = batch_dir / f"dock_{lig_id}"
+            out_file = pose_dir / "out.pdbqt"
+            if not out_file.is_file() or out_file.stat().st_size == 0:
+                continue
+            try:
+                from ..engines.vina import parse_vina_out
+
+                poses = parse_vina_out(out_file)
+            except Exception as exc:  # 降级兜底
+                log.warning(
+                    "salvaged pose for %s did not parse (%s); treating as failed", lig_id, exc
+                )
+                continue
+            if not poses:
+                continue
+            salvaged[lig_id] = type(
+                "_Salvaged",
+                (),
+                {
+                    "engine": self.engine.manifest.name,
+                    "engine_version": getattr(self.engine, "version", "unknown"),
+                    "params": self.params,
+                    "box": self.box,
+                    "poses": poses,
+                    "log": f"salvaged after dock_batch failure ({out_file})",
+                    "run_dir": str(pose_dir),
+                },
+            )()
+        if salvaged:
+            log.info(
+                "salvaged %d/%d ligand(s) from a failed batch chunk",
+                len(salvaged),
+                len(batch_tuples),
+            )
+        return salvaged
+
     def _run_single_tier_batch(
         self,
         pending: list[PreparedLigand],
@@ -2000,7 +2053,12 @@ class ScreeningRunner:
                 )
             except Exception as exc:  # 降级兜底 - engine failure must not abort it all
                 log.warning("Single-tier dock_batch failed (%s); isolating per ligand", exc)
-                batch_res = {}
+                # A chunk can die *after* some ligands already finished, and the
+                # exception path used to drop every one of them on the floor: the
+                # whole chunk was marked dock_failed, so completed work was silently
+                # discarded and re-docked on resume.  Salvage whatever the engine
+                # already wrote to disk before falling back.
+                batch_res = self._salvage_batch_results(batch_tuples, batch_dir)
             for lig in chunk:
                 if self._cancel_requested:
                     break
@@ -3056,6 +3114,7 @@ class ScreeningRunner:
             n_funnel_filtered=n_funnel_filtered,
             n_dock_failed=n_dock_failed,
             n_docked_success=n_docked_success,
+            n_aborted=n_abandoned,
             funnel_csv_path=str(funnel_csv),
             checkpoint_path=str(self.checkpoint.path),
             results_csv_path=str(results_csv),

@@ -134,6 +134,24 @@ def build_audit_markdown(
 
     parts.append(_hline("免责声明"))
     parts.append(_DISCLAIMER + "\n")
+    # What this run did NOT actually do.  The audit package is the artefact people
+    # cite, so a fallback that never made it into a number still has to be visible
+    # here -- otherwise "PoseBusters passed" and "PoseBusters crashed, 3 rules ran"
+    # look identical to a reader.
+    from ..degradation import LEDGER
+
+    parts.append(_hline("降级记录"))
+    if LEDGER.is_clean():
+        parts.append("- 本次运行未记录任何降级。\n")
+    else:
+        parts.append(
+            f"- 共 {len(LEDGER.items())} 条降级，其中影响科学结论 "
+            f"{len(LEDGER.science_items())} 条。\n"
+        )
+        for item in LEDGER.items():
+            flag = "（影响结论）" if item.affects_science else ""
+            parts.append(f"  - `{item.category}` {item.detail}{flag} — {item.origin}\n")
+
     return "".join(parts)
 
 

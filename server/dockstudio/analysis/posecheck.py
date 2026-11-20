@@ -7,6 +7,7 @@ from pathlib import Path
 
 from rdkit import Chem
 
+from ..degradation import LEDGER
 from ..logging import get_logger
 from ..models import Box, PoseCheck, PoseCheckIssue
 
@@ -215,12 +216,33 @@ def check_pose(
         idx = (
             int(stem.rsplit("_", 1)[-1]) if "_" in stem and stem.rsplit("_", 1)[-1].isdigit() else 1
         )
+    degraded_reason: str | None = None
     if use_posebusters and _posebusters_available():
         try:
             return _run_posebusters(pose_sdf, idx, protein_pdb=protein_pdb)
         except Exception as exc:  # 降级兜底
+            # Never let this be silent: "PoseBusters passed" and "PoseBusters crashed
+            # so we ran 3 hand-rolled rules" are different claims, and the UI/report
+            # must not present the second as the first.
+            degraded_reason = f"PoseBusters 执行失败，已降级为内置几何检查（仅 3 条规则）: {exc}"
             log.warning("PoseBusters failed, falling back to builtin: %s", exc)
+            LEDGER.record(
+                "POSE_CHECK",
+                f"PoseBusters 失败，仅跑内置 3 条规则: {exc}",
+                origin="analysis.posecheck.check_pose",
+            )
     mol = _load_pose(pose_sdf)
     issues = _check_clashes(mol) + _check_bond_lengths(mol) + _check_out_of_box(mol, box)
     ok = not any(i.severity == "error" for i in issues)
-    return PoseCheck(pose_index=idx, ok=ok, source="builtin", issues=issues)
+    if degraded_reason is not None:
+        issues = [
+            *issues,
+            PoseCheckIssue(
+                rule="posebusters_unavailable",
+                severity="warning",
+                message=degraded_reason,
+            ),
+        ]
+    return PoseCheck(
+        pose_index=idx, ok=ok, source="builtin", issues=issues, degraded_reason=degraded_reason
+    )
