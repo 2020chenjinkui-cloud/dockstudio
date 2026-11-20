@@ -28,7 +28,11 @@ class DockParams(BaseModel):
     num_modes: int = Field(default=9, ge=1, le=100)
     energy_range: float = Field(default=3.0, gt=0)
     cpu: int = Field(default_factory=_default_cpu, ge=1)
-    seed: int | None = None
+    #: Deterministic docking seed.  Defaults to a fixed value because the
+    #: delivery contract (T1 数值可复现) FAILS when a run has no seed: vina's
+    #: default seed is randomised, so two "identical" runs disagree.  Pass
+    #: ``None`` explicitly to opt into a random search.
+    seed: int | None = 42
     scoring: str = "vina"  # must be in engine manifest scoring_functions
 
     # --- Orthogonal rescoring / in-place refinement (GNINA --minimize / --score_only) ---

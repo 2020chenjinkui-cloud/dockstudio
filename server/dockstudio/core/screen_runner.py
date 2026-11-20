@@ -2325,18 +2325,29 @@ class ScreeningRunner:
             # Only when *nothing* passed the strict QC: keep the single best penalised
             # candidate and flag it loudly instead of silently waiving the thresholds
             # (report P0-2.2 / Task Fix 3.2.2).
-            fallback_pool = [r for r in tier2_results if r["affinity_mean"] < 900.0] or list(
-                tier2_results
-            )
-            fallback_pool.sort(key=lambda x: x.get("sile", 0.0), reverse=True)
-            fallback = fallback_pool[0]
-            fallback["qc_fallback_warning"] = "UNCONVERGED_OR_HIGH_STRAIN"
-            converged = [fallback]
-            log.warning(
-                "Tier 2: no candidate passed convergence/strain QC; degrading to best SILE "
-                "candidate %s with HIGH_STRAIN_UNCONVERGED_FALLBACK warning",
-                fallback["ligand"].id,
-            )
+            # Only results with a *real* affinity may be resurrected.  The 999.0
+            # sentinel marks a failed dock; promoting one would put the same
+            # molecule in both the dock_failed and docked_success buckets and make
+            # the funnel claim a candidate it never measured (T18-F1).
+            fallback_pool = [r for r in tier2_results if r["affinity_mean"] < 900.0]
+            if not fallback_pool:
+                # Nothing usable at all: do not manufacture a candidate.  The funnel
+                # must report this honestly (dock_failed + filtered, no success).
+                log.error(
+                    "Tier 2: every candidate failed to dock (all affinity >= 900); "
+                    "refusing to promote a failed result — reporting 0 candidates",
+                )
+                converged = []
+            else:
+                fallback_pool.sort(key=lambda x: x.get("sile", 0.0), reverse=True)
+                fallback = fallback_pool[0]
+                fallback["qc_fallback_warning"] = "UNCONVERGED_OR_HIGH_STRAIN"
+                converged = [fallback]
+                log.warning(
+                    "Tier 2: no candidate passed convergence/strain QC; degrading to best "
+                    "SILE candidate %s with HIGH_STRAIN_UNCONVERGED_FALLBACK warning",
+                    fallback["ligand"].id,
+                )
 
         converged.sort(key=lambda x: x["sile"], reverse=True)
 
