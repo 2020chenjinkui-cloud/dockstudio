@@ -1,0 +1,132 @@
+[
+  {
+    "pdb_id": "1HSG",
+    "ccd": "MK1",
+    "status": "ok",
+    "top_affinity": -11.265,
+    "rmsd_inplace": 0.454,
+    "rmsd_superposed": 0.38,
+    "d9_pass": "PASS",
+    "posecheck_source": "posebusters",
+    "posecheck_errors": [],
+    "posecheck_ok": true,
+    "seconds": 111.9
+  },
+  {
+    "pdb_id": "1HVR",
+    "ccd": "XK2",
+    "status": "ok",
+    "top_affinity": -11.275,
+    "rmsd_inplace": 0.945,
+    "rmsd_superposed": 0.764,
+    "d9_pass": "PASS",
+    "posecheck_source": "posebusters",
+    "posecheck_errors": [
+      "inchi_convertible",
+      "all_atoms_connected"
+    ],
+    "posecheck_ok": false,
+    "seconds": 159.1
+  },
+  {
+    "pdb_id": "1ETR",
+    "ccd": "MIT",
+    "status": "error: AtomValenceException: Explicit valence for atom # 18 N, 4, is greater than permitted",
+    "top_affinity": -9.297,
+    "seconds": 43.8
+  },
+  {
+    "pdb_id": "2SIM",
+    "ccd": "DAN",
+    "status": "ok",
+    "top_affinity": -6.723,
+    "rmsd_inplace": 1.34,
+    "rmsd_superposed": 1.23,
+    "d9_pass": "PASS",
+    "posecheck_source": "posebusters",
+    "posecheck_errors": [],
+    "posecheck_ok": true,
+    "seconds": 13.2
+  },
+  {
+    "pdb_id": "1PPC",
+    "ccd": "MID",
+    "status": "ok",
+    "top_affinity": -9.247,
+    "rmsd_inplace": null,
+    "rmsd_superposed": null,
+    "d9_pass": "SKIP",
+    "posecheck_source": "posebusters",
+    "posecheck_errors": [],
+    "posecheck_ok": true,
+    "seconds": 44.6
+  },
+  {
+    "pdb_id": "1R1H",
+    "ccd": "BIR",
+    "status": "ok",
+    "top_affinity": -9.845,
+    "rmsd_inplace": 0.777,
+    "rmsd_superposed": 0.581,
+    "d9_pass": "PASS",
+    "posecheck_source": "posebusters",
+    "posecheck_errors": [],
+    "posecheck_ok": true,
+    "seconds": 35.4
+  },
+  {
+    "pdb_id": "4DFR",
+    "ccd": "MTX",
+    "status": "ok",
+    "top_affinity": -8.112,
+    "rmsd_inplace": 6.193,
+    "rmsd_superposed": 2.314,
+    "d9_pass": "FAIL",
+    "posecheck_source": "posebusters",
+    "posecheck_errors": [],
+    "posecheck_ok": true,
+    "seconds": 34.6
+  },
+  {
+    "pdb_id": "3CLA",
+    "ccd": "CLM",
+    "status": "ok",
+    "top_affinity": -5.541,
+    "rmsd_inplace": null,
+    "rmsd_superposed": null,
+    "d9_pass": "SKIP",
+    "posecheck_source": "posebusters",
+    "posecheck_errors": [],
+    "posecheck_ok": true,
+    "seconds": 14.9
+  },
+  {
+    "pdb_id": "1AJV",
+    "ccd": "NMB",
+    "status": "ok",
+    "top_affinity": -9.105,
+    "rmsd_inplace": 1.649,
+    "rmsd_superposed": 1.395,
+    "d9_pass": "PASS",
+    "posecheck_source": "posebusters",
+    "posecheck_errors": [
+      "inchi_convertible",
+      "all_atoms_connected"
+    ],
+    "posecheck_ok": false,
+    "seconds": 157.4
+  },
+  {
+    "pdb_id": "4PHV",
+    "ccd": "VAC",
+    "status": "ok",
+    "top_affinity": -12.056,
+    "rmsd_inplace": 0.62,
+    "rmsd_superposed": 0.584,
+    "d9_pass": "PASS",
+    "posecheck_source": "posebusters",
+    "posecheck_errors": [],
+    "posecheck_ok": true,
+    "seconds": 171.9
+  }
+]

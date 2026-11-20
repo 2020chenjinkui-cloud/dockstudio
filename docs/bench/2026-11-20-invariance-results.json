@@ -1,0 +1,57 @@
+{
+  "repro_seed42": [
+    {
+      "indinavir": -11.298,
+      "ibuprofen": -6.803,
+      "aspirin": -5.8,
+      "quercetin": -7.939,
+      "curcumin": -8.739,
+      "baicalin": -8.9
+    },
+    {
+      "indinavir": -11.298,
+      "ibuprofen": -6.803,
+      "aspirin": -5.8,
+      "quercetin": -7.939,
+      "curcumin": -8.739,
+      "baicalin": -8.9
+    }
+  ],
+  "identical_seed42": true,
+  "exh8": {
+    "indinavir": -11.298,
+    "ibuprofen": -6.803,
+    "aspirin": -5.8,
+    "quercetin": -7.939,
+    "curcumin": -8.739,
+    "baicalin": -8.9
+  },
+  "exh16": {
+    "indinavir": -11.304,
+    "ibuprofen": -6.803,
+    "aspirin": -5.8,
+    "quercetin": -7.939,
+    "curcumin": -8.796,
+    "baicalin": -8.944
+  },
+  "spearman_exh": 1.0,
+  "random": [
+    {
+      "indinavir": -11.25,
+      "ibuprofen": -6.912,
+      "aspirin": -5.605,
+      "quercetin": -7.945,
+      "curcumin": -8.87,
+      "baicalin": -8.934
+    },
+    {
+      "indinavir": -11.305,
+      "ibuprofen": -6.92,
+      "aspirin": -5.797,
+      "quercetin": -7.95,
+      "curcumin": -8.813,
+      "baicalin": -8.958
+    }
+  ],
+  "identical_random": false
+}
