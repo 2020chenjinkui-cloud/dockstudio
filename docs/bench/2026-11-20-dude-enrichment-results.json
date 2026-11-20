@@ -1,0 +1,13 @@
+{
+  "metrics": {
+    "bedroc": 0.3576,
+    "bedroc_20": 0.3576,
+    "auroc": 0.4808,
+    "ef_1%": 2.0,
+    "ef_1pct": 2.0,
+    "ef_5%": 1.0,
+    "ef_5pct": 1.0
+  },
+  "n_scored": 160,
+  "n_actives": 40
+}
