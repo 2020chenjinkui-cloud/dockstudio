@@ -274,7 +274,7 @@ class JobRunner:
             job,
             "job.completed",
             {
-                "top_affinity": (result.poses[0].affinity if result.poses else None),
+                "top_affinity": result.top_affinity,
                 "n_poses": len(result.poses),
             },
         )
@@ -282,7 +282,7 @@ class JobRunner:
             "job %s completed: %d poses, top=%.2f",
             job.id,
             len(result.poses),
-            result.poses[0].affinity if result.poses else float("nan"),
+            result.top_affinity if result.top_affinity is not None else float("nan"),
         )
 
     # ------------------------------------------------------------- helpers

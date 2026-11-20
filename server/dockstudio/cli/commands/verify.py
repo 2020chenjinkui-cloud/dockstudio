@@ -542,7 +542,7 @@ def _verify_t1(
                 work_dir,
             )
 
-            recalc_score = res.poses[0].affinity if res.poses else reported_score
+            recalc_score = res.top_affinity if res.top_affinity is not None else reported_score
 
             # Parse docked conformer from engine output
             recalc_mol = None
@@ -681,7 +681,7 @@ def _verify_t2(
                         ),
                         work_dir,
                     )
-                    aff = res.poses[0].affinity if res.poses else item["affinity"]
+                    aff = res.top_affinity if res.top_affinity is not None else item["affinity"]
                     run_res.append({"id": cid, "affinity": aff})
                 finally:
                     shutil.rmtree(work_dir, ignore_errors=True)

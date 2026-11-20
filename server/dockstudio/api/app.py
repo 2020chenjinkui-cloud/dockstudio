@@ -388,7 +388,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "dock run %s: %d poses, top=%.2f",
             run_dir.name,
             len(result.poses),
-            result.poses[0].affinity,
+            result.top_affinity,
         )
         return result
 
@@ -653,7 +653,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     engine=job.request.engine,
                     scoring=job.request.params.scoring,
                     exhaustiveness=job.request.params.exhaustiveness,
-                    top_affinity=poses[0].affinity if poses else None,
+                    top_affinity=job.result.top_affinity if job.result else None,
                     n_poses=len(poses),
                     status=job.status,
                 )

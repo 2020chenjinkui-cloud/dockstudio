@@ -346,7 +346,7 @@ def _display_results_and_qc(
                 lig_name,
                 [c.model_dump() if hasattr(c, "model_dump") else dict(c) for c in top_contacts],
                 pose_index=1,
-                affinity=result.poses[0].affinity if result.poses else 0.0,
+                affinity=result.top_affinity if result.top_affinity is not None else 0.0,
             )
             console.print(tree)
             console.print()

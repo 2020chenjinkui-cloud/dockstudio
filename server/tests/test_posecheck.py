@@ -61,11 +61,16 @@ def pose_files(tmp_path_factory, indinavir_smiles: str, hsg_pdb_bytes: bytes):
     mk1 = rec.cocrystal_ligands[0]
     box = Box(center=mk1.center, size=(22.5, 22.5, 22.5))
     run = base / "run"
+    # exhaustiveness=1 was too low once the fixture started using the *real*
+    # stereoisomer: measured on the P4, exh=1 returns +8.408 kcal/mol with an
+    # internal_steric_clash (a physically impossible pose), while exh>=4 returns
+    # -11.27 with no errors.  The old flat SMILES happened to land in the pocket by
+    # luck, which is why the low setting looked fine before.
     eng.dock(
         Path(rec.pdbqt_path),
         Path(lig.pdbqt_path),
         box,
-        DockParams(exhaustiveness=1, num_modes=3, cpu=max(1, (os.cpu_count() or 2) - 1), seed=42),
+        DockParams(exhaustiveness=4, num_modes=3, cpu=max(1, (os.cpu_count() or 2) - 1), seed=42),
         run,
     )
     return rec, export_poses(run / "out.pdbqt", run), box
@@ -109,3 +114,44 @@ def test_1hsg_real_pose_ok(pose_files) -> None:
     check = check_pose(poses[0], box=box)
     # real indinavir pose has no geometry errors (warnings tolerable)
     assert not any(i.severity == "error" for i in check.issues), check.issues
+
+
+def test_docking_score_is_physically_plausible(pose_files) -> None:
+    """A positive affinity means the pose is worse than not binding at all.
+
+    This guard exists because exhaustiveness=1 used to hand back +8.408 kcal/mol with
+    an internal_steric_clash and nothing complained: the pose check only looked at the
+    geometry of the SDF, never at the score.  A dock reported as successful must be
+    favourable, otherwise downstream ranking silently promotes a non-binder.
+    """
+    _, _, _ = pose_files  # ensures the shared vina run happened and stayed valid
+    from dockstudio.analysis.export import export_poses  # noqa: F401  (fixture parity)
+
+    import tempfile
+    from pathlib import Path as _P
+
+    from dockstudio.engines.vina import VinaEngine
+    from dockstudio.models import Box, DockParams
+    from dockstudio.prep.ligand import prepare_ligand_from_smiles
+    from dockstudio.prep.receptor import prepare_receptor
+
+    fixtures = _P(__file__).parent / "fixtures"
+    td = _P(tempfile.mkdtemp())
+    rec = prepare_receptor((fixtures / "1HSG.pdb").read_bytes(), "1HSG.pdb", td / "rec")
+    lig = prepare_ligand_from_smiles(
+        (fixtures / "indinavir_smiles.txt").read_text().strip(), "indinavir", td / "lig"
+    )
+    mk1 = rec.cocrystal_ligands[0]
+    res = VinaEngine().dock(
+        _P(rec.pdbqt_path),
+        _P(lig.pdbqt_path),
+        Box(center=mk1.center, size=(22.5, 22.5, 22.5)),
+        DockParams(exhaustiveness=4, num_modes=3, cpu=2, seed=42),
+        td / "run",
+    )
+    top = res.top_affinity
+    assert top is not None, "no pose produced"
+    assert top < 0.0, (
+        f"top affinity {top:.3f} kcal/mol is not favourable -- the pose is worse than "
+        "not binding, so it must not be reported as a successful dock"
+    )

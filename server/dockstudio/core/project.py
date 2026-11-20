@@ -26,9 +26,7 @@ def _job_summary(job: Job) -> dict:
         "ligand_id": job.request.ligand_id,
         "engine": job.request.engine,
         "batch_id": job.batch_id,
-        "top_affinity": (
-            job.result.poses[0].affinity if job.result is not None and job.result.poses else None
-        ),
+        "top_affinity": (job.result.top_affinity if job.result is not None else None),
         "created_at": job.created_at,
         "finished_at": job.finished_at,
     }

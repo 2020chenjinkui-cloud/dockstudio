@@ -1947,7 +1947,7 @@ class ScreeningRunner:
         self, lig: PreparedLigand, dock_res: DockResult, fallback_run_dir: Path
     ) -> dict[str, Any]:
         """Normalises one single-tier docking result (effs + checkpoint + pose path)."""
-        top_aff = float(dock_res.poses[0].affinity) if dock_res.poses else 999.0
+        top_aff = float(dock_res.top_affinity) if dock_res.top_affinity is not None else 999.0
         run_dir = str(dock_res.run_dir) if dock_res.run_dir else str(fallback_run_dir)
         pose_file = _find_pose_file_in_dir(run_dir, lig.id)
         if pose_file is None:
@@ -2108,7 +2108,7 @@ class ScreeningRunner:
                 self._record_hard_abort(exc, lig.id)
                 self._cancel_requested = True
                 raise
-            top_aff = res.poses[0].affinity if res.poses else 999.0
+            top_aff = res.top_affinity if res.top_affinity is not None else 999.0
             run_dir = str(res.run_dir) if res.run_dir else str(sub_dir)
             if not res.poses or top_aff >= 900.0:
                 self._mark_dock_failed(lig.id)
@@ -2194,7 +2194,11 @@ class ScreeningRunner:
 
             for lig in chunk:
                 dock_res = batch_res.get(lig.id)
-                top_aff = dock_res.poses[0].affinity if dock_res and dock_res.poses else 999.0
+                top_aff = (
+                    dock_res.top_affinity
+                    if dock_res and dock_res.top_affinity is not None
+                    else 999.0
+                )
                 # Unified per-ligand run directory: DockResult.run_dir (Uni-Dock now
                 # guarantees <run_dir>/out.pdbqt) with the documented layout fallback.
                 run_dir = (
@@ -2374,7 +2378,7 @@ class ScreeningRunner:
         """Converts one seed's DockResult into (affinity, restored pose, pose path)."""
         if dock_res is None or not dock_res.poses:
             return 999.0, None, None
-        affinity = float(dock_res.poses[0].affinity)
+        affinity = float(dock_res.top_affinity)
         run_dir = Path(dock_res.run_dir) if dock_res.run_dir else fallback_dir
         pose_file = _find_pose_file_in_dir(run_dir, lig.id)
         if pose_file is None:

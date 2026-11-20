@@ -19,6 +19,7 @@ from pathlib import Path
 # 必须 rdkit 先加载；isort 若重排会破坏该约束，故用 isort: off 固定本段顺序。
 # isort: off
 from rdkit import Chem as _Chem
+from rdkit.Chem import AllChem
 from rdkit.Chem.MolStandardize import rdMolStandardize as _rdMolStandardize  # noqa: F401
 from openbabel import openbabel as ob
 # isort: on
@@ -269,6 +270,33 @@ def _obabel_pdb_to_pdbqt(pdb_path: Path, out_pdbqt: Path) -> None:
     out_pdbqt.write_text("\n".join(lines) + "\n", encoding="utf-8", newline="\n")
 
 
+def restore_cocrystal_bond_orders(sdf_path: Path, smiles: str) -> tuple[Path, str | None]:
+    """Graft real bond orders onto an extracted co-crystal SDF using a CCD SMILES.
+
+    A PDB HETATM group has no bond orders, so the extracted SDF is a single-bonded
+    skeleton (MK1 in 1HSG: C36H69N5O4 instead of C36H47N5O4).  ``AssignBondOrders-
+    FromTemplate`` recovers the real chemistry from a curated SMILES while keeping
+    the *crystal coordinates* -- which is what redocking needs.
+
+    Returns ``(path, error)``.  On failure the original file is left untouched and
+    the error is returned so the caller can surface it instead of degrading silently.
+    """
+    try:
+        template = _Chem.MolFromSmiles(smiles)
+        if template is None:
+            return sdf_path, f"无法解析共晶配体 SMILES: {smiles!r}"
+        raw = _Chem.MolFromMolFile(str(sdf_path), sanitize=False, removeHs=True)
+        if raw is None:
+            return sdf_path, f"无法读取共晶 SDF: {sdf_path}"
+        fixed = AllChem.AssignBondOrdersFromTemplate(template, raw)
+        if fixed is None:
+            return sdf_path, "AssignBondOrdersFromTemplate 返回空（SMILES 与坐标不匹配）"
+        sdf_path.write_text(_Chem.MolToMolBlock(fixed) + "\n$$$$\n", encoding="utf-8", newline="\n")
+        return sdf_path, None
+    except Exception as exc:  # 降级兜底
+        return sdf_path, f"补全共晶键级失败: {exc}"
+
+
 def prepare_receptor(content: bytes, filename: str, out_dir: Path) -> PreparedReceptor:
     """Prepare an uploaded PDB receptor: clean, protonate, write PDBQT."""
     if filename.lower().endswith((".cif", ".mmcif")):
@@ -337,8 +365,30 @@ def prepare_receptor(content: bytes, filename: str, out_dir: Path) -> PreparedRe
                 sdf_path.write_text(
                     _Chem.MolToMolBlock(mol) + "\n$$$$\n", encoding="utf-8", newline="\n"
                 )
+                # R7: a PDB HETATM group carries no bond orders (CONECT gives
+                # connectivity only), so this SDF is a *single-bonded skeleton*: for
+                # MK1 in 1HSG it comes out as C36H69N5O4 instead of C36H47N5O4, i.e.
+                # 22 extra hydrogens.  It is still useful for geometry (coordinates
+                # and the box centre are exact), but it must never be presented as
+                # the ligand's chemical identity.  Consumers that need identity have
+                # to supply a curated CCD SMILES (see prep.identity).
                 cocrystal_meta.append(
-                    {"resname": resname, "chain": chain, "sdf_path": str(sdf_path)}
+                    {
+                        "resname": resname,
+                        "chain": chain,
+                        "sdf_path": str(sdf_path),
+                        "bond_orders": "unknown",
+                        "chemistry_reliable": False,
+                        "note": (
+                            "PDB HETATM 抽取的结构不含键级（CONECT 只给连接关系），"
+                            "此 SDF 仅为单键骨架，几何坐标可靠但化学身份不可靠；"
+                            "需要身份判定时请提供该共晶配体的 CCD SMILES。"
+                        ),
+                    }
+                )
+                warnings.append(
+                    f"共晶配体 {resname}:{chain} 的 SDF 不含键级（PDB 限制），"
+                    "仅可用于几何定位；用于身份/立体化学判定请提供 CCD SMILES"
                 )
         except Exception as exc:  # 降级兜底
             warnings.append(f"共晶配体 {resname}:{chain} SDF 抽取失败: {exc}")

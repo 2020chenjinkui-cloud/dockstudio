@@ -140,7 +140,7 @@ class BatchStore:
                     job_id=job.id,
                     status=job.status,
                     top_affinity=(
-                        job.result.poses[0].affinity
+                        job.result.top_affinity
                         if job.result is not None and job.result.poses
                         else None
                     ),

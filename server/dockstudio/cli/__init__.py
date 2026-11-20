@@ -76,7 +76,7 @@ def _cmd_demo() -> int:
     print(f"dock finished: {len(result.poses)} poses in {run_dir}")
     for pose in result.poses:
         print(f"  pose {pose.index}: affinity = {pose.affinity:.2f} kcal/mol")
-    print(f"top affinity: {result.poses[0].affinity:.2f} kcal/mol")
+    print(f"top affinity: {result.top_affinity:.2f} kcal/mol")
     return 0
 
 

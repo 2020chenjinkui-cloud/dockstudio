@@ -56,7 +56,14 @@ class Pose(BaseModel):
 
 
 class DockResult(BaseModel):
-    """Uniform result object every engine adapter must produce."""
+    """Uniform result object every engine adapter must produce.
+
+    ``poses`` keeps the engine's own order.  That order is **not** comparable across
+    engines: vina writes poses by ascending affinity, while gnina defaults to
+    ``--pose_sort_order=CNNscore``, so ``poses[0]`` is the best CNN score, not the
+    best affinity.  Use :attr:`top_pose` / :attr:`top_affinity` for the best-scoring
+    pose; read ``poses[0]`` only when the engine's native ranking is what you want.
+    """
 
     engine: str
     engine_version: str
@@ -65,6 +72,25 @@ class DockResult(BaseModel):
     poses: list[Pose]
     log: str = ""
     run_dir: str
+
+    @property
+    def pose_order(self) -> str:
+        """What ``poses`` is sorted by, per the engine's own convention."""
+        return "cnn_score" if self.engine.startswith("gnina") else "affinity"
+
+    @property
+    def top_pose(self) -> Pose | None:
+        """Best pose by **affinity** (the comparable metric), regardless of engine order."""
+        if not self.poses:
+            return None
+        usable = [p for p in self.poses if p.affinity is not None and p.affinity < 900.0]
+        return min(usable, key=lambda p: p.affinity) if usable else self.poses[0]
+
+    @property
+    def top_affinity(self) -> float | None:
+        """Lowest affinity among the poses, or ``None`` when nothing docked."""
+        pose = self.top_pose
+        return None if pose is None else pose.affinity
 
 
 class LigandQCProfile(BaseModel):
