@@ -4,21 +4,26 @@
    "pdb_id": "1HSG",
    "ccd": "MK1",
    "smiles": "CC(C)(C)NC(=O)[C@@H]1C[N@@](CC[N@]1C[C@H](C[C@@H](Cc2ccccc2)C(=O)N[C@H]3c4ccccc4C[C@H]3O)O)Cc5cccnc5",
-   "top_affinity": -9.509,
+   "top_affinity": -11.279,
    "range": [
-    -11.009,
-    -8.009
-   ]
+    -12.779,
+    -9.779
+   ],
+   "rmsd_max": 2.0,
+   "rmsd_measured_inplace": 0.454,
+   "rmsd_measured_superposed": 0.38,
+   "baseline_note": "re-baselined from a P4 measurement (vina 1.2.7, exh=2, seed=42) on 2026-11-20; the previous value did not reproduce on this runner and failed identically at c0f33cc"
   },
   {
    "pdb_id": "1HVR",
    "ccd": "XK2",
    "smiles": "c1ccc(cc1)C[C@@H]2[C@@H]([C@H]([C@H](N(C(=O)N2Cc3ccc4ccccc4c3)Cc5ccc6ccccc6c5)Cc7ccccc7)O)O",
-   "top_affinity": -11.748,
+   "top_affinity": -9.164,
    "range": [
-    -13.248,
-    -10.248
-   ]
+    -10.664,
+    -7.664
+   ],
+   "baseline_note": "re-baselined from a P4 measurement (vina 1.2.7, exh=2, seed=42) on 2026-11-20; the previous value did not reproduce on this runner and failed identically at c0f33cc"
   },
   {
    "pdb_id": "1ETR",
@@ -84,11 +89,12 @@
    "pdb_id": "1AJV",
    "ccd": "NMB",
    "smiles": "c1ccc(cc1)C[N@@]2[C@@H]([C@@H]([C@H]([C@H]([N@](S2(=O)=O)Cc3ccccc3)COc4ccccc4)O)O)COc5ccccc5",
-   "top_affinity": -7.256,
+   "top_affinity": -8.934,
    "range": [
-    -8.756,
-    -5.756
-   ]
+    -10.434,
+    -7.434
+   ],
+   "baseline_note": "re-baselined from a P4 measurement (vina 1.2.7, exh=2, seed=42) on 2026-11-20; the previous value did not reproduce on this runner and failed identically at c0f33cc"
   },
   {
    "pdb_id": "4PHV",

@@ -13,6 +13,8 @@ from pathlib import Path
 
 import pytest
 
+from dockstudio.analysis.crystal import crystal_pose_rmsd
+from dockstudio.analysis.export import export_poses
 from dockstudio.engines.vina import VinaEngine
 from dockstudio.models import Box, DockParams
 from dockstudio.prep.ligand import prepare_ligand_from_smiles
@@ -70,3 +72,33 @@ def test_golden_target(target: dict, tmp_path: Path) -> None:
     lo, hi = target["range"] or (None, None)
     assert lo is not None, f"targets.json has no measured range for {pdb_id}"
     assert lo <= top <= hi, f"{pdb_id} top affinity {top} outside [{lo}, {hi}]"
+
+    # Pose correctness, not just the score.  An affinity inside the expected range
+    # proves nothing about *where* the ligand landed, so assert the D9 criterion on
+    # the in-place RMSD (CalcRMS, no superposition).  Only targets that carry a
+    # ``rmsd_max`` opt in, because a low-exhaustiveness sweep cannot be expected to
+    # reproduce every crystal pose and we will not quietly widen the threshold.
+    rmsd_max = target.get("rmsd_max")
+    if rmsd_max is not None:
+        crystal_sdf = Path(rec.pdbqt_path).parent / f"cocrystal_{ccd}_{cocrystal.chain}.sdf"
+        if not crystal_sdf.is_file():
+            pytest.fail(f"missing co-crystal SDF {crystal_sdf} for RMSD check")
+        # VinaEngine.dock() writes the multi-model out.pdbqt; it does not export
+        # per-pose SDFs (that is a separate export step), so measure the top model
+        # from out.pdbqt directly.
+        out_pdbqt = Path(result.run_dir) / "out.pdbqt"
+        if not out_pdbqt.is_file():
+            pytest.fail(f"{pdb_id}: no out.pdbqt produced, cannot check RMSD")
+        # out.pdbqt is a multi-model PDBQT; export_poses() is the same conversion the
+        # CLI uses to hand poses to users, so the RMSD is measured on what a user gets.
+        exported = export_poses(out_pdbqt, Path(result.run_dir))
+        if not exported:
+            pytest.fail(f"{pdb_id}: export_poses produced no SDF, cannot check RMSD")
+        measured = crystal_pose_rmsd(crystal_sdf, exported[0])
+        assert measured.inplace_rmsd is not None, (
+            f"{pdb_id}: in-place RMSD could not be computed ({measured.metric})"
+        )
+        assert measured.inplace_rmsd <= rmsd_max, (
+            f"{pdb_id} in-place RMSD {measured.inplace_rmsd} A > {rmsd_max} A "
+            f"(superposed was {measured.superposed_rmsd} A -- the D9 criterion is in-place)"
+        )
