@@ -1,0 +1,11 @@
+{
+  "n": 16,
+  "prep_s": 10.0,
+  "vina_s": 89.5,
+  "vina_per_mol": 5.59,
+  "unidock_s": 18.7,
+  "unidock_per_mol": 1.17,
+  "speedup": 4.8,
+  "total_ligands_line": "Total ligands: 16",
+  "gpu_ms": 10124.2
+}

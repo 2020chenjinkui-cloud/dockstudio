@@ -1,0 +1,18 @@
+[
+  {
+    "n_prepared": 64,
+    "prep_s": 88.0,
+    "dock_s": 73.7,
+    "per_mol_s": 1.151,
+    "gpu_ms": 65344.4,
+    "total_line": "Total ligands: 64"
+  },
+  {
+    "n_prepared": 256,
+    "prep_s": 343.5,
+    "dock_s": 267.9,
+    "per_mol_s": 1.046,
+    "gpu_ms": 233840.9,
+    "total_line": "Total ligands: 256"
+  }
+]
